@@ -2,33 +2,10 @@ use std::env;
 use std::fs::File;
 use std::io::{self, Read, Write};
 
-fn convert(byte: u8, wide: bool) -> &'static str {
-    if wide {
-        match byte {
-            0b0000_0000 => "ax",
-            0b0000_0001 => "cx",
-            0b0000_0010 => "dx",
-            0b0000_0011 => "bx",
-            0b0000_0100 => "sp",
-            0b0000_0101 => "bp",
-            0b0000_0110 => "si",
-            0b0000_0111 => "di",
-            _ => panic!(),
-        }
-    } else {
-        match byte {
-            0b0000_0000 => "al",
-            0b0000_0001 => "cl",
-            0b0000_0010 => "dl",
-            0b0000_0011 => "bl",
-            0b0000_0100 => "ah",
-            0b0000_0101 => "ch",
-            0b0000_0110 => "dh",
-            0b0000_0111 => "bh",
-            _ => panic!(),
-        }
-    }
-}
+const NAMES: [[&str; 8]; 2] = [
+    ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"],
+    ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
+];
 
 fn run<W: Write>(filename: &str, mut stdout: W) {
     let mut buffer = [0; 2];
@@ -41,15 +18,14 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
         let byte2 = buffer[1]; // MOD REG R/M
 
         // Assume OPCODE is 100010 and D is 0.
-        let w = byte1 & 1 == 1;
+        let w = (byte1 & 1) as usize;
 
         // Assume MOD is 11.
         writeln!(
             stdout,
             "mov {}, {}",
-            // I don't know bit operations. ¯\_(ツ)_/¯
-            convert(byte2 & 0b0000_0111, w),
-            convert((byte2 & 0b0011_1000).rotate_right(3), w)
+            NAMES[w][(byte2 & 0b111) as usize],
+            NAMES[w][((byte2 >> 3) & 0b111) as usize]
         )
         .unwrap();
     }
