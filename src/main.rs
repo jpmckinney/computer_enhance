@@ -1,6 +1,6 @@
 use std::env;
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 
 const NAMES: [[&str; 8]; 2] = [
     ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"],
@@ -8,19 +8,17 @@ const NAMES: [[&str; 8]; 2] = [
 ];
 
 fn run<W: Write>(filename: &str, mut stdout: W) {
-    let mut buffer = [0; 2];
-    let mut file = File::open(filename).unwrap();
+    let file = BufReader::new(File::open(filename).unwrap());
+    let mut iterator = file.bytes();
 
     writeln!(stdout, "bits 16").unwrap();
 
-    while file.read(&mut buffer).unwrap_or(0) > 0 {
-        let byte1 = buffer[0]; // OPCODE D W
-        let byte2 = buffer[1]; // MOD REG R/M
+    while let Some(Ok(byte1)) = iterator.next() {
+        // OPCODE D W
+        let byte2 = iterator.next().unwrap().unwrap(); // MOD REG R/M
 
-        // Assume OPCODE is 100010 and D is 0.
         let w = (byte1 & 1) as usize;
 
-        // Assume MOD is 11.
         writeln!(
             stdout,
             "mov {}, {}",
