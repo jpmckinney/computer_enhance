@@ -1,11 +1,38 @@
 use std::env;
 use std::fs::File;
-use std::io::{self, BufReader, Read, Write};
+use std::io::{self, BufReader, Bytes, Read, Write};
 
-const NAMES: [[&str; 8]; 2] = [
+const REG_NAMES: [[&str; 8]; 2] = [
     ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"],
     ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
 ];
+
+const RM_NAMES: [&str; 8] = [
+    "[bx + si]",
+    "[bx + di]",
+    "[bp + si]",
+    "[bp + di]",
+    "si",
+    "di",
+    "[bp]",
+    "bx",
+];
+
+const RM_SUBSTRINGS: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
+
+macro_rules! out {
+    ( $stdout:ident, $left:expr, $right:expr) => {
+        writeln!($stdout, "mov {}, {}", $left, $right).unwrap();
+    };
+}
+
+fn disp(iterator: &mut Bytes<BufReader<File>>, w: bool) -> u16 {
+    if w {
+        u16::from_ne_bytes([iterator.next().unwrap().unwrap(), iterator.next().unwrap().unwrap()])
+    } else {
+        u16::from(iterator.next().unwrap().unwrap())
+    }
+}
 
 fn run<W: Write>(filename: &str, mut stdout: W) {
     let file = BufReader::new(File::open(filename).unwrap());
@@ -16,29 +43,45 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
     // OPCODE D W
     while let Some(Ok(byte1)) = iterator.next() {
         // Immediate to register.
-        if (byte1 >> 4) & 1 == 1 {
+        if (byte1 >> 4) & 0b1011 == 0b1011 {
             let w = ((byte1 >> 3) & 1) as usize;
-            let reg = byte1 & 0b111;
+            let reg = (byte1 & 0b111) as usize;
+            let data = disp(&mut iterator, w == 1);
 
-            let mut data = [0; 2];
-            if w == 1 {
-                data[0] = iterator.next().unwrap().unwrap();
-            }
-            data[1] = iterator.next().unwrap().unwrap();
-
-            writeln!(stdout, "mov {}, {}", NAMES[w][reg as usize], u16::from_ne_bytes(data)).unwrap();
+            out!(stdout, REG_NAMES[w][reg], data);
+        // Assume MOV opcode.
         } else {
             // MOD REG R/M
             let byte2 = iterator.next().unwrap().unwrap();
-            let w = (byte1 & 1) as usize;
 
-            writeln!(
-                stdout,
-                "mov {}, {}",
-                NAMES[w][(byte2 & 0b111) as usize],
-                NAMES[w][((byte2 >> 3) & 0b111) as usize]
-            )
-            .unwrap();
+            let d = (byte1 >> 1) & 1 == 1;
+            let w = (byte1 & 1) as usize;
+            let m0d = byte2 >> 6; // mod
+            let reg = ((byte2 >> 3) & 0b111) as usize;
+            let rm = (byte2 & 0b111) as usize;
+
+            let reg_text = REG_NAMES[w][reg].to_string();
+            let rm_text = match m0d {
+                // Memory mode. No displacement follows.*
+                0b00 => RM_NAMES[rm].to_string(),
+                // Memory mode. Displacement follows.
+                0b01 | 0b10 => {
+                    let data = disp(&mut iterator, m0d == 0b10);
+                    if data == 0 {
+                        RM_NAMES[rm].to_string()
+                    } else {
+                        format!("[{} + {}]", RM_SUBSTRINGS[rm], data)
+                    }
+                }
+                // Register mode. No displacement follows.
+                0b11 => REG_NAMES[w][rm].to_string(),
+                _ => panic!(),
+            };
+
+            // 1 = the REG field identifies the destination operand.
+            // 0 = the REG field identifies the source operand.
+            let (dst, src) = if d { (reg_text, rm_text) } else { (rm_text, reg_text) };
+            out!(stdout, dst, src);
         }
     }
 }
@@ -65,10 +108,19 @@ mod tests {
 
         run(test_path, &mut assembly_file);
 
-        Command::new("nasm")
-            .args(["-o", binary_path.to_str().unwrap(), assembly_path.to_str().unwrap()])
-            .output()
+        let mut text = vec![];
+        File::open(assembly_path.clone())
+            .unwrap()
+            .read_to_end(&mut text)
             .unwrap();
+        println!("{}", String::from_utf8(text).unwrap());
+
+        let status = Command::new("nasm")
+            .args(["-o", binary_path.to_str().unwrap(), assembly_path.to_str().unwrap()])
+            .status()
+            .expect("failed to execute process");
+
+        assert!(status.success());
 
         let mut actual = vec![];
         File::open(binary_path).unwrap().read_to_end(&mut actual).unwrap();
