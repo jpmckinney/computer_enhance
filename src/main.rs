@@ -38,31 +38,29 @@ fn main() {
 mod tests {
     use super::*;
 
-    use std::io::BufRead;
-    use std::io::BufReader;
+    use std::fs::File;
+    use std::process::Command;
 
-    fn check(name: &str) {
-        let file = File::open(format!("{name}.asm")).unwrap();
-        let mut reader = BufReader::new(file);
-        let mut line = vec![];
+    use tempfile::tempdir;
+
+    fn check(test_path: &str) {
+        let dir = tempdir().unwrap();
+        let assembly_path = dir.path().join("test.asm");
+        let binary_path = dir.path().join("test");
+        let mut assembly_file = File::create(assembly_path.clone()).unwrap();
+
+        run(test_path, &mut assembly_file);
+
+        Command::new("nasm")
+            .args(["-o", binary_path.to_str().unwrap(), assembly_path.to_str().unwrap()])
+            .output()
+            .unwrap();
+
+        let mut actual = vec![];
+        File::open(binary_path).unwrap().read_to_end(&mut actual).unwrap();
         let mut expected = vec![];
-
-        while reader.read_until(b'\n', &mut line).unwrap_or(0) > 0 {
-            // Skip comments and empty lines.
-            if line[0] != b';' && line[0] != b'\n' {
-                expected.extend(line.clone());
-            }
-            line.clear();
-        }
-
-        let mut stdout = vec![];
-        run(name, &mut stdout);
-
-        // Compare strings for readable output.
-        assert_eq!(
-            String::from_utf8(stdout).unwrap(),
-            String::from_utf8(expected).unwrap()
-        );
+        File::open(test_path).unwrap().read_to_end(&mut expected).unwrap();
+        assert_eq!(actual, expected);
     }
 
     include!(concat!(env!("OUT_DIR"), "/main.include"));
