@@ -20,12 +20,6 @@ const RM_NAMES: [&str; 8] = [
 
 const RM_SUBSTRINGS: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 
-macro_rules! out {
-    ( $stdout:ident, $left:expr, $right:expr) => {
-        writeln!($stdout, "mov {}, {}", $left, $right).unwrap();
-    };
-}
-
 fn disp(iterator: &mut Bytes<BufReader<File>>, w: bool) -> u16 {
     if w {
         u16::from_ne_bytes([iterator.next().unwrap().unwrap(), iterator.next().unwrap().unwrap()])
@@ -40,22 +34,23 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
     writeln!(stdout, "bits 16").unwrap();
 
-    // OPCODE D W
     while let Some(Ok(byte1)) = iterator.next() {
-        // Immediate to register.
-        if (byte1 >> 4) & 0b1011 == 0b1011 {
+        // MOV Immediate to register.
+        // 1011 W REG
+        let (dst, src) = if byte1 >> 4 == 0b1011 {
             let w = ((byte1 >> 3) & 1) as usize;
             let reg = (byte1 & 0b111) as usize;
             let data = disp(&mut iterator, w == 1);
 
-            out!(stdout, REG_NAMES[w][reg], data);
-        // Assume MOV opcode.
-        } else {
-            // MOD REG R/M
-            let byte2 = iterator.next().unwrap().unwrap();
-
+            (REG_NAMES[w][reg].to_string(), data.to_string())
+        // MOV Register/memory to/from register.
+        // 100010 D W
+        } else if byte1 >> 2 == 0b100010 {
             let d = (byte1 >> 1) & 1 == 1;
             let w = (byte1 & 1) as usize;
+
+            // MOD REG R/M
+            let byte2 = iterator.next().unwrap().unwrap();
             let m0d = byte2 >> 6; // mod
             let reg = ((byte2 >> 3) & 0b111) as usize;
             let rm = (byte2 & 0b111) as usize;
@@ -68,7 +63,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
                 0b01 | 0b10 => {
                     let data = disp(&mut iterator, m0d == 0b10);
                     if data == 0 {
-                        RM_NAMES[rm].to_string()
+                        RM_NAMES[rm].to_string() // omit 0
                     } else {
                         format!("[{} + {}]", RM_SUBSTRINGS[rm], data)
                     }
@@ -80,9 +75,16 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
             // 1 = the REG field identifies the destination operand.
             // 0 = the REG field identifies the source operand.
-            let (dst, src) = if d { (reg_text, rm_text) } else { (rm_text, reg_text) };
-            out!(stdout, dst, src);
-        }
+            if d {
+                (reg_text, rm_text)
+            } else {
+                (rm_text, reg_text)
+            }
+        } else {
+            ("not".to_string(), "implemented".to_string())
+        };
+
+        writeln!(stdout, "mov {}, {}", dst, src).unwrap();
     }
 }
 

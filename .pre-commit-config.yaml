@@ -28,5 +28,6 @@ repos:
           "-Dwarnings",
           "-Dclippy::pedantic",
           "-Dclippy::nursery",
+          "-Aclippy::unreadable-literal"
         ]
         pass_filenames: false
