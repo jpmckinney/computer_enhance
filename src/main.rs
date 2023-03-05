@@ -13,19 +13,33 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
     writeln!(stdout, "bits 16").unwrap();
 
+    // OPCODE D W
     while let Some(Ok(byte1)) = iterator.next() {
-        // OPCODE D W
-        let byte2 = iterator.next().unwrap().unwrap(); // MOD REG R/M
+        // Immediate to register.
+        if (byte1 >> 4) & 1 == 1 {
+            let w = ((byte1 >> 3) & 1) as usize;
+            let reg = byte1 & 0b111;
 
-        let w = (byte1 & 1) as usize;
+            let mut data = [0; 2];
+            if w == 1 {
+                data[0] = iterator.next().unwrap().unwrap();
+            }
+            data[1] = iterator.next().unwrap().unwrap();
 
-        writeln!(
-            stdout,
-            "mov {}, {}",
-            NAMES[w][(byte2 & 0b111) as usize],
-            NAMES[w][((byte2 >> 3) & 0b111) as usize]
-        )
-        .unwrap();
+            writeln!(stdout, "mov {}, {}", NAMES[w][reg as usize], u16::from_ne_bytes(data)).unwrap();
+        } else {
+            // MOD REG R/M
+            let byte2 = iterator.next().unwrap().unwrap();
+            let w = (byte1 & 1) as usize;
+
+            writeln!(
+                stdout,
+                "mov {}, {}",
+                NAMES[w][(byte2 & 0b111) as usize],
+                NAMES[w][((byte2 >> 3) & 0b111) as usize]
+            )
+            .unwrap();
+        }
     }
 }
 
