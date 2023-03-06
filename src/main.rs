@@ -8,7 +8,7 @@ const REG_NAMES: [[&str; 8]; 2] = [
     ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
 ];
 
-const RM_NAMES: [&str; 8] = [
+const R_M_NAMES: [&str; 8] = [
     "[bx + si]",
     "[bx + di]",
     "[bp + si]",
@@ -19,7 +19,7 @@ const RM_NAMES: [&str; 8] = [
     "bx",
 ];
 
-const RM_SUBSTRINGS: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
+const R_M_SUBSTRINGS: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 
 fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
     let byte = iterator.next().unwrap().unwrap();
@@ -30,28 +30,28 @@ fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
     }
 }
 
-fn disassemble_rm(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, rm: usize) -> String {
+fn disassemble_r_m(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, r_m: usize) -> String {
     match m0d {
         // Memory mode. No displacement follows.*
         0b00 => {
             // "Except when R/M = 110, then 16-bit displacement follows."
-            if rm == 0b110 {
+            if r_m == 0b110 {
                 format!("[{}]", next_i16(iterator, true))
             } else {
-                RM_NAMES[rm].to_string()
+                R_M_NAMES[r_m].to_string()
             }
         }
         // Memory mode. Displacement follows.
         0b01 | 0b10 => {
             let disp = next_i16(iterator, m0d == 0b10);
             match disp.cmp(&0) {
-                Ordering::Greater => format!("[{} + {}]", RM_SUBSTRINGS[rm], disp),
-                Ordering::Less => format!("[{} - {}]", RM_SUBSTRINGS[rm], -disp),
-                Ordering::Equal => RM_NAMES[rm].to_string(),
+                Ordering::Greater => format!("[{} + {}]", R_M_SUBSTRINGS[r_m], disp),
+                Ordering::Less => format!("[{} - {}]", R_M_SUBSTRINGS[r_m], -disp),
+                Ordering::Equal => R_M_NAMES[r_m].to_string(),
             }
         }
         // Register mode. No displacement follows.
-        0b11 => REG_NAMES[w][rm].to_string(),
+        0b11 => REG_NAMES[w][r_m].to_string(),
         _ => panic!(),
     }
 }
@@ -84,12 +84,12 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let byte2 = iterator.next().unwrap().unwrap();
             let m0d = byte2 >> 6; // mod
             let reg = ((byte2 >> 3) & 0b111) as usize;
-            let rm = (byte2 & 0b111) as usize;
+            let r_m = (byte2 & 0b111) as usize;
 
             let reg_text = REG_NAMES[w][reg].to_string();
-            let rm_text = disassemble_rm(&mut iterator, w, m0d, rm);
+            let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
 
-            (d, reg_text, rm_text)
+            (d, reg_text, r_m_text)
 
         // Immediate to register/memory.
         // 1100011 W
@@ -99,9 +99,9 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             // MOD 000 R/M
             let byte2 = iterator.next().unwrap().unwrap();
             let m0d = byte2 >> 6; // mod
-            let rm = (byte2 & 0b111) as usize;
+            let r_m = (byte2 & 0b111) as usize;
 
-            let rm_text = disassemble_rm(&mut iterator, w, m0d, rm);
+            let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
 
             // data | data if w = 1
             let data = next_i16(&mut iterator, w == 1);
@@ -112,7 +112,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
                 format!("byte {}", data)
             };
 
-            (true, rm_text, data_text)
+            (true, r_m_text, data_text)
 
         // Memory to accumulator, and vice versa.
         // 101000 D W
