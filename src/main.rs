@@ -55,6 +55,12 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
     // MOV Register/memory to/from register.
     // 100010 D W
+    // mov bp, [1024]
+    // mov al, [bx + si]
+    // mov al, [bx + si + 1024]
+    // mov ax, [bx + di - 8]
+    // mov dx, [bp]
+    // mov si, bx
     while let Some(Ok(byte1)) = iterator.next() {
         let (ordered, op1, op2) = if byte1 >> 2 == 0b100010 {
             let d = (byte1 >> 1) & 1 == 1;
@@ -73,6 +79,12 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
         // Immediate to register/memory.
         // 1100011 W
+        // mov [1024], byte 8
+        // mov [bx + si], byte 8
+        // mov [bx + si + 1024], word 2048
+        // mov [bx + di - 8], word 2048
+        // mov [bp], byte 8
+        // mov bx, word 2048
         } else if byte1 >> 1 == 0b1100011 {
             let w = (byte1 & 1) as usize;
 
@@ -96,6 +108,8 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
         // MOV Immediate to register.
         // 1011 W REG
+        // mov cl, 8
+        // mov cx, 1024
         } else if byte1 >> 4 == 0b1011 {
             let w = ((byte1 >> 3) & 1) as usize;
             let reg = (byte1 & 0b111) as usize;
@@ -109,6 +123,8 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
         // Memory to accumulator, and vice versa.
         // 101000 E W
+        // mov ax, [8]
+        // mov ax, [1024]
         } else if byte1 >> 2 == 0b101000 {
             let e = (byte1 >> 1) & 1 == 0;
             let w = byte1 & 1 == 1;
