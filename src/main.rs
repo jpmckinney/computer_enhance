@@ -13,37 +13,35 @@ const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", 
 fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
     let byte = iterator.next().unwrap().unwrap();
     if w {
-        i16::from_ne_bytes([byte, iterator.next().unwrap().unwrap()])
+        i16::from_le_bytes([byte, iterator.next().unwrap().unwrap()])
     } else {
-        i16::from(i8::from_ne_bytes([byte]))
+        i16::from(i8::from_le_bytes([byte]))
     }
 }
 
 fn disassemble_r_m(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, r_m: usize) -> String {
-    match m0d {
+    let disp = match m0d {
         // Memory mode. No displacement follows.*
         0b00 => {
-            // "Except when R/M = 110, then 16-bit displacement follows."
+            // Direct address. "Except when R/M = 110, then 16-bit displacement follows."
             if r_m == 0b110 {
-                format!("[{}]", next_i16(iterator, true))
-            } else {
-                format!("[{}]", R_M_NAMES[r_m])
+                return format!("[{}]", next_i16(iterator, true));
             }
+            0
         }
-        // Memory mode. Displacement follows.
-        0b01 | 0b10 => {
-            // DISP-LO | DISP-HI
-            let disp = next_i16(iterator, m0d == 0b10);
-
-            match disp.cmp(&0) {
-                Ordering::Greater => format!("[{} + {}]", R_M_NAMES[r_m], disp),
-                Ordering::Less => format!("[{} - {}]", R_M_NAMES[r_m], -disp),
-                Ordering::Equal => format!("[{}]", R_M_NAMES[r_m]),
-            }
-        }
+        // Memory mode. 8-bit displacement follows.
+        0b01 => next_i16(iterator, false),
+        // Memory mode. 16-bit displacement follows.
+        0b10 => next_i16(iterator, true),
         // Register mode. No displacement follows.
-        0b11 => REG_NAMES[w][r_m].to_string(),
+        0b11 => return REG_NAMES[w][r_m].to_string(),
         _ => panic!(),
+    };
+
+    match disp.cmp(&0) {
+        Ordering::Greater => format!("[{} + {}]", R_M_NAMES[r_m], disp),
+        Ordering::Less => format!("[{} - {}]", R_M_NAMES[r_m], -disp),
+        Ordering::Equal => format!("[{}]", R_M_NAMES[r_m]),
     }
 }
 
@@ -98,11 +96,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             // data | data if w = 1
             let data = next_i16(&mut iterator, w == 1);
 
-            let data_text = if w == 1 {
-                format!("word {}", data)
-            } else {
-                format!("byte {}", data)
-            };
+            let data_text = format!("{} {}", if w == 1 { "word" } else { "byte" }, data);
 
             (true, r_m_text, data_text)
 
