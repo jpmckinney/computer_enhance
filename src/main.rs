@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufReader, Bytes, Read, Write};
@@ -20,11 +21,38 @@ const RM_NAMES: [&str; 8] = [
 
 const RM_SUBSTRINGS: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 
-fn disp(iterator: &mut Bytes<BufReader<File>>, w: bool) -> u16 {
+fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
+    let byte = iterator.next().unwrap().unwrap();
     if w {
-        u16::from_ne_bytes([iterator.next().unwrap().unwrap(), iterator.next().unwrap().unwrap()])
+        i16::from_ne_bytes([byte, iterator.next().unwrap().unwrap()])
     } else {
-        u16::from(iterator.next().unwrap().unwrap())
+        i16::from(i8::from_ne_bytes([byte]))
+    }
+}
+
+fn disassemble_rm(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, rm: usize) -> String {
+    match m0d {
+        // Memory mode. No displacement follows.*
+        0b00 => {
+            // "Except when R/M = 110, then 16-bit displacement follows."
+            if rm == 0b110 {
+                format!("[{}]", next_i16(iterator, true))
+            } else {
+                RM_NAMES[rm].to_string()
+            }
+        }
+        // Memory mode. Displacement follows.
+        0b01 | 0b10 => {
+            let disp = next_i16(iterator, m0d == 0b10);
+            match disp.cmp(&0) {
+                Ordering::Greater => format!("[{} + {}]", RM_SUBSTRINGS[rm], disp),
+                Ordering::Less => format!("[{} - {}]", RM_SUBSTRINGS[rm], -disp),
+                Ordering::Equal => RM_NAMES[rm].to_string(),
+            }
+        }
+        // Register mode. No displacement follows.
+        0b11 => REG_NAMES[w][rm].to_string(),
+        _ => panic!(),
     }
 }
 
@@ -37,12 +65,15 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
     while let Some(Ok(byte1)) = iterator.next() {
         // MOV Immediate to register.
         // 1011 W REG
-        let (dst, src) = if byte1 >> 4 == 0b1011 {
+        let (ordered, op1, op2) = if byte1 >> 4 == 0b1011 {
             let w = ((byte1 >> 3) & 1) as usize;
             let reg = (byte1 & 0b111) as usize;
-            let data = disp(&mut iterator, w == 1);
 
-            (REG_NAMES[w][reg].to_string(), data.to_string())
+            // data | data if w = 1
+            let data = next_i16(&mut iterator, w == 1);
+
+            (true, REG_NAMES[w][reg].to_string(), data.to_string())
+
         // MOV Register/memory to/from register.
         // 100010 D W
         } else if byte1 >> 2 == 0b100010 {
@@ -56,34 +87,53 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let rm = (byte2 & 0b111) as usize;
 
             let reg_text = REG_NAMES[w][reg].to_string();
-            let rm_text = match m0d {
-                // Memory mode. No displacement follows.*
-                0b00 => RM_NAMES[rm].to_string(),
-                // Memory mode. Displacement follows.
-                0b01 | 0b10 => {
-                    let data = disp(&mut iterator, m0d == 0b10);
-                    if data == 0 {
-                        RM_NAMES[rm].to_string() // omit 0
-                    } else {
-                        format!("[{} + {}]", RM_SUBSTRINGS[rm], data)
-                    }
-                }
-                // Register mode. No displacement follows.
-                0b11 => REG_NAMES[w][rm].to_string(),
-                _ => panic!(),
+            let rm_text = disassemble_rm(&mut iterator, w, m0d, rm);
+
+            (d, reg_text, rm_text)
+
+        // Immediate to register/memory.
+        // 1100011 W
+        } else if byte1 >> 1 == 0b1100011 {
+            let w = (byte1 & 1) as usize;
+
+            // MOD 000 R/M
+            let byte2 = iterator.next().unwrap().unwrap();
+            let m0d = byte2 >> 6; // mod
+            let rm = (byte2 & 0b111) as usize;
+
+            let rm_text = disassemble_rm(&mut iterator, w, m0d, rm);
+
+            // data | data if w = 1
+            let data = next_i16(&mut iterator, w == 1);
+
+            let data_text = if w == 1 {
+                format!("word {}", data)
+            } else {
+                format!("byte {}", data)
             };
 
-            // 1 = the REG field identifies the destination operand.
-            // 0 = the REG field identifies the source operand.
-            if d {
-                (reg_text, rm_text)
-            } else {
-                (rm_text, reg_text)
-            }
+            (true, rm_text, data_text)
+
+        // Memory to accumulator, and vice versa.
+        // 101000 D W
+        } else if byte1 >> 2 == 0b101000 {
+            let d = (byte1 >> 1) & 1 == 1;
+            let w = byte1 & 1 == 1;
+
+            // addr-lo | addr-hi
+            let addr = format!("[{}]", next_i16(&mut iterator, w));
+
+            (d, addr, "ax".to_string())
+
+        // Register/memory to segment register, and vice versa.
+        // 10001110 | 10001100
         } else {
-            ("not".to_string(), "implemented".to_string())
+            (true, "not".to_string(), "implemented".to_string())
         };
 
+        // 1 = the REG field identifies the destination operand.
+        // 0 = the REG field identifies the source operand.
+        let (dst, src) = if ordered { (op1, op2) } else { (op2, op1) };
         writeln!(stdout, "mov {}, {}", dst, src).unwrap();
     }
 }
