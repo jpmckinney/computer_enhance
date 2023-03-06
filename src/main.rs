@@ -32,7 +32,9 @@ fn disassemble_r_m(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, r_m
         }
         // Memory mode. Displacement follows.
         0b01 | 0b10 => {
+            // DISP-LO | DISP-HI
             let disp = next_i16(iterator, m0d == 0b10);
+
             match disp.cmp(&0) {
                 Ordering::Greater => format!("[{} + {}]", R_M_NAMES[r_m], disp),
                 Ordering::Less => format!("[{} - {}]", R_M_NAMES[r_m], -disp),
@@ -51,23 +53,10 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
     writeln!(stdout, "bits 16").unwrap();
 
+    // MOV Register/memory to/from register.
+    // 100010 D W
     while let Some(Ok(byte1)) = iterator.next() {
-        // MOV Immediate to register.
-        // 1011 W REG
-        let (ordered, op1, op2) = if byte1 >> 4 == 0b1011 {
-            let w = ((byte1 >> 3) & 1) as usize;
-            let reg = (byte1 & 0b111) as usize;
-
-            // data | data if w = 1
-            let data = next_i16(&mut iterator, w == 1);
-
-            let reg_text = REG_NAMES[w][reg].to_string();
-
-            (true, reg_text, data.to_string())
-
-        // MOV Register/memory to/from register.
-        // 100010 D W
-        } else if byte1 >> 2 == 0b100010 {
+        let (ordered, op1, op2) = if byte1 >> 2 == 0b100010 {
             let d = (byte1 >> 1) & 1 == 1;
             let w = (byte1 & 1) as usize;
 
@@ -104,6 +93,19 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             };
 
             (true, r_m_text, data_text)
+
+        // MOV Immediate to register.
+        // 1011 W REG
+        } else if byte1 >> 4 == 0b1011 {
+            let w = ((byte1 >> 3) & 1) as usize;
+            let reg = (byte1 & 0b111) as usize;
+
+            // data | data if w = 1
+            let data = next_i16(&mut iterator, w == 1);
+
+            let reg_text = REG_NAMES[w][reg].to_string();
+
+            (true, reg_text, data.to_string())
 
         // Memory to accumulator, and vice versa.
         // 101000 E W
