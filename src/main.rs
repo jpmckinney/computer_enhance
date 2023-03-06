@@ -8,18 +8,7 @@ const REG_NAMES: [[&str; 8]; 2] = [
     ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
 ];
 
-const R_M_NAMES: [&str; 8] = [
-    "[bx + si]",
-    "[bx + di]",
-    "[bp + si]",
-    "[bp + di]",
-    "si",
-    "di",
-    "[bp]",
-    "bx",
-];
-
-const R_M_SUBSTRINGS: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
+const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 
 fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
     let byte = iterator.next().unwrap().unwrap();
@@ -38,16 +27,16 @@ fn disassemble_r_m(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, r_m
             if r_m == 0b110 {
                 format!("[{}]", next_i16(iterator, true))
             } else {
-                R_M_NAMES[r_m].to_string()
+                format!("[{}]", R_M_NAMES[r_m])
             }
         }
         // Memory mode. Displacement follows.
         0b01 | 0b10 => {
             let disp = next_i16(iterator, m0d == 0b10);
             match disp.cmp(&0) {
-                Ordering::Greater => format!("[{} + {}]", R_M_SUBSTRINGS[r_m], disp),
-                Ordering::Less => format!("[{} - {}]", R_M_SUBSTRINGS[r_m], -disp),
-                Ordering::Equal => R_M_NAMES[r_m].to_string(),
+                Ordering::Greater => format!("[{} + {}]", R_M_NAMES[r_m], disp),
+                Ordering::Less => format!("[{} - {}]", R_M_NAMES[r_m], -disp),
+                Ordering::Equal => format!("[{}]", R_M_NAMES[r_m]),
             }
         }
         // Register mode. No displacement follows.
@@ -71,8 +60,9 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
             // data | data if w = 1
             let data = next_i16(&mut iterator, w == 1);
+            let reg_text = REG_NAMES[w][reg].to_string();
 
-            (true, REG_NAMES[w][reg].to_string(), data.to_string())
+            (true, reg_text, data.to_string())
 
         // MOV Register/memory to/from register.
         // 100010 D W
