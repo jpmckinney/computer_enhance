@@ -60,6 +60,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
             // data | data if w = 1
             let data = next_i16(&mut iterator, w == 1);
+
             let reg_text = REG_NAMES[w][reg].to_string();
 
             (true, reg_text, data.to_string())
@@ -107,13 +108,13 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
         // Memory to accumulator, and vice versa.
         // 101000 D W
         } else if byte1 >> 2 == 0b101000 {
-            let d = (byte1 >> 1) & 1 == 1;
+            let d = (byte1 >> 1) & 1 == 0;
             let w = byte1 & 1 == 1;
 
             // addr-lo | addr-hi
             let addr = format!("[{}]", next_i16(&mut iterator, w));
 
-            (d, addr, "ax".to_string())
+            (d, "ax".to_string(), addr)
 
         // Register/memory to segment register, and vice versa.
         // 10001110 | 10001100
