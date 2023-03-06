@@ -106,15 +106,15 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             (true, r_m_text, data_text)
 
         // Memory to accumulator, and vice versa.
-        // 101000 D W
+        // 101000 E W
         } else if byte1 >> 2 == 0b101000 {
-            let d = (byte1 >> 1) & 1 == 0;
+            let e = (byte1 >> 1) & 1 == 0;
             let w = byte1 & 1 == 1;
 
             // addr-lo | addr-hi
             let addr = format!("[{}]", next_i16(&mut iterator, w));
 
-            (d, "ax".to_string(), addr)
+            (e, "ax".to_string(), addr)
 
         // Register/memory to segment register, and vice versa.
         // 10001110 | 10001100
