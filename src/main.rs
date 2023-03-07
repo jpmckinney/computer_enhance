@@ -124,9 +124,11 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let w = byte1 & 1 == 1;
 
             // addr-lo | addr-hi
-            let addr = format!("[{}]", next_i16(&mut iterator, w));
+            let addr = format!("[{}]", next_i16(&mut iterator, true));
 
-            (e, "ax".to_string(), addr)
+            let reg_text = if w { "ax" } else { "al" };
+
+            (e, reg_text.to_string(), addr)
 
         // Register/memory to segment register, and vice versa.
         // 10001110 | 10001100
