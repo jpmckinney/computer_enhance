@@ -109,8 +109,6 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
         // mov [bx + di - 8], word 2048
         // mov [bp], byte 8
         // mov bx, word 2048
-
-        // TODO 0011010W data xor
         } else if byte1 >> 1 == 0b1100011 || byte1 >> 2 == 0b100000 {
             let mov = byte1 >> 6 == 0b11;
             let s = (byte1 >> 1) & 1;
