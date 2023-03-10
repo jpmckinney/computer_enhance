@@ -12,6 +12,12 @@ const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", 
 
 const OP_NAMES: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
 
+const JUMP4_NAMES: [&str; 16] = [
+    "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle",
+];
+
+const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
+
 fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
     let byte = iterator.next().unwrap().unwrap();
     if w {
@@ -169,8 +175,25 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
                 writeln!(stdout, "{op_text} [{addr}], {reg_text}").unwrap();
             }
 
-        // Register/memory to segment register, and vice versa.
-        // 10001110 | 10001100
+        // 0111 JUMP
+        } else if byte1 >> 4 == 0b111 {
+            let op = (byte1 & 0b1111) as usize;
+            let byte2 = iterator.next().unwrap().unwrap();
+
+            let op_text = JUMP4_NAMES[op];
+            let ip_inc8 = i8::from_le_bytes([byte2]);
+
+            writeln!(stdout, "{op_text} {ip_inc8}").unwrap();
+
+        // 111000 JUMP
+        } else if byte1 >> 2 == 0b111000 {
+            let op = (byte1 & 0b11) as usize;
+            let byte2 = iterator.next().unwrap().unwrap();
+
+            let op_text = JUMP2_NAMES[op];
+            let ip_inc8 = i8::from_le_bytes([byte2]);
+
+            writeln!(stdout, "{op_text} {ip_inc8}").unwrap();
         } else {
             writeln!(stdout, "{byte1:8b}").unwrap();
         };
