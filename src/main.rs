@@ -152,7 +152,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
             writeln!(stdout, "mov {reg_text}, {data}").unwrap();
 
-        // Memory to accumulator, and vice versa.
+        // Memory to accumulator. Accumulator to memory. Immediate to accumulator.
         // 101000 E W MOV
         // 00###1 0 W ADD, etc.
         //
@@ -169,13 +169,15 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let op_text = operation(byte1, mov);
             let reg_text = if w { "ax" } else { "al" };
 
-            if e {
+            if !mov {
+                writeln!(stdout, "{op_text} {reg_text}, {addr}").unwrap();
+            } else if e {
                 writeln!(stdout, "{op_text} {reg_text}, [{addr}]").unwrap();
             } else {
                 writeln!(stdout, "{op_text} [{addr}], {reg_text}").unwrap();
             }
 
-        // 0111 JUMP
+        // 0111   JUMP
         // 111000 JUMP
         } else if byte1 >> 4 == 0b111 || byte1 >> 2 == 0b111000 {
             let byte2 = iterator.next().unwrap().unwrap();
