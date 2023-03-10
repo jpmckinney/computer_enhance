@@ -10,12 +10,22 @@ const REG_NAMES: [[&str; 8]; 2] = [
 
 const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 
+const OP_NAMES: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+
 fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
     let byte = iterator.next().unwrap().unwrap();
     if w {
         i16::from_le_bytes([byte, iterator.next().unwrap().unwrap()])
     } else {
         i16::from(i8::from_le_bytes([byte]))
+    }
+}
+
+const fn operation(byte: u8, mov: bool) -> &'static str {
+    if mov {
+        "mov"
+    } else {
+        OP_NAMES[((byte >> 3) & 0b111) as usize]
     }
 }
 
@@ -51,16 +61,19 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
     writeln!(stdout, "bits 16").unwrap();
 
-    // MOV Register/memory to/from register.
-    // 100010 D W
-    // mov bp, [1024]
-    // mov al, [bx + si]
-    // mov al, [bx + si + 1024]
-    // mov ax, [bx + di - 8]
-    // mov dx, [bp]
-    // mov si, bx
     while let Some(Ok(byte1)) = iterator.next() {
-        if byte1 >> 2 == 0b100010 {
+        // Register/memory to/from register.
+        // 100010 D W MOV
+        // 00###0 D W ADD, etc.
+        //
+        // mov bp, [1024]
+        // mov al, [bx + si]
+        // mov al, [bx + si + 1024]
+        // mov ax, [bx + di - 8]
+        // mov dx, [bp]
+        // mov si, bx
+        if byte1 >> 2 == 0b100010 || (byte1 >> 2) & 0b110001 == 0 {
+            let mov = byte1 >> 7 == 1;
             let d = (byte1 >> 1) & 1 == 1;
             let w = (byte1 & 1) as usize;
 
@@ -70,44 +83,58 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let reg = ((byte2 >> 3) & 0b111) as usize;
             let r_m = (byte2 & 0b111) as usize;
 
+            let op_text = operation(byte1, mov);
             let reg_text = REG_NAMES[w][reg];
             let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
 
             // 1 = the REG field identifies the destination operand.
             // 0 = the REG field identifies the source operand.
             if d {
-                writeln!(stdout, "mov {reg_text}, {r_m_text}").unwrap();
+                writeln!(stdout, "{op_text} {reg_text}, {r_m_text}").unwrap();
             } else {
-                writeln!(stdout, "mov {r_m_text}, {reg_text}").unwrap();
+                writeln!(stdout, "{op_text} {r_m_text}, {reg_text}").unwrap();
             }
 
         // Immediate to register/memory.
-        // 1100011 W
+        // 110001 1 W MOV
+        // 100000 S W ADD, etc.
+        // 100000 0 W AND
+        // 100000 0 W OR
+        //
+        // Nothing is 100000 1 X, so it's OK to treat AND and OR as having an S bit.
+        //
         // mov [1024], byte 8
         // mov [bx + si], byte 8
         // mov [bx + si + 1024], word 2048
         // mov [bx + di - 8], word 2048
         // mov [bp], byte 8
         // mov bx, word 2048
-        } else if byte1 >> 1 == 0b1100011 {
+
+        // TODO 0011010W data xor
+        } else if byte1 >> 1 == 0b1100011 || byte1 >> 2 == 0b100000 {
+            let mov = byte1 >> 6 == 0b11;
+            let s = (byte1 >> 1) & 1;
             let w = (byte1 & 1) as usize;
 
-            // MOD 000 R/M
+            // MOD ### R/M
             let byte2 = iterator.next().unwrap().unwrap();
             let m0d = byte2 >> 6; // mod
             let r_m = (byte2 & 0b111) as usize;
 
             let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
+            let wide = (mov || s == 0) && w == 1;
 
-            // data | data if w = 1
-            let data = next_i16(&mut iterator, w == 1);
+            // data | data if w = 1 or data | data if sw = 01
+            let data = next_i16(&mut iterator, wide);
 
-            let unit = if w == 1 { "word" } else { "byte" };
+            let op_text = operation(byte2, mov);
+            let unit = if wide { "word" } else { "byte" };
 
-            writeln!(stdout, "mov {r_m_text}, {unit} {data}").unwrap();
+            writeln!(stdout, "{op_text} {r_m_text}, {unit} {data}").unwrap();
 
         // MOV Immediate to register.
         // 1011 W REG
+        //
         // mov cl, 8
         // mov cx, 1024
         } else if byte1 >> 4 == 0b1011 {
@@ -122,28 +149,32 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             writeln!(stdout, "mov {reg_text}, {data}").unwrap();
 
         // Memory to accumulator, and vice versa.
-        // 101000 E W
+        // 101000 E W MOV
+        // 00###1 0 W ADD, etc.
+        //
         // mov ax, [8]
         // mov ax, [1024]
-        } else if byte1 >> 2 == 0b101000 {
+        } else if byte1 >> 2 == 0b101000 || (byte1 >> 1) & 0b1100011 == 0b10 {
+            let mov = byte1 >> 7 == 1;
             let e = (byte1 >> 1) & 1 == 0; // opposite of d
             let w = byte1 & 1 == 1;
 
-            // addr-lo | addr-hi
-            let addr = next_i16(&mut iterator, true);
+            // addr-lo | addr-hi or data | data if w = 1
+            let addr = next_i16(&mut iterator, mov || w);
 
+            let op_text = operation(byte1, mov);
             let reg_text = if w { "ax" } else { "al" };
 
             if e {
-                writeln!(stdout, "mov {reg_text}, [{addr}]").unwrap();
+                writeln!(stdout, "{op_text} {reg_text}, [{addr}]").unwrap();
             } else {
-                writeln!(stdout, "mov [{addr}], {reg_text}").unwrap();
+                writeln!(stdout, "{op_text} [{addr}], {reg_text}").unwrap();
             }
 
         // Register/memory to segment register, and vice versa.
         // 10001110 | 10001100
         } else {
-            writeln!(stdout, "{byte1:b}").unwrap();
+            writeln!(stdout, "{byte1:8b}").unwrap();
         };
     }
 }
