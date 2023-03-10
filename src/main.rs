@@ -176,24 +176,20 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             }
 
         // 0111 JUMP
-        } else if byte1 >> 4 == 0b111 {
-            let op = (byte1 & 0b1111) as usize;
-            let byte2 = iterator.next().unwrap().unwrap();
-
-            let op_text = JUMP4_NAMES[op];
-            let ip_inc8 = i8::from_le_bytes([byte2]);
-
-            writeln!(stdout, "{op_text} {ip_inc8}").unwrap();
-
         // 111000 JUMP
-        } else if byte1 >> 2 == 0b111000 {
-            let op = (byte1 & 0b11) as usize;
+        } else if byte1 >> 4 == 0b111 || byte1 >> 2 == 0b111000 {
             let byte2 = iterator.next().unwrap().unwrap();
 
-            let op_text = JUMP2_NAMES[op];
+            let op_text = if byte1 >> 4 == 0b111 {
+                JUMP4_NAMES[(byte1 & 0b1111) as usize]
+            } else {
+                JUMP2_NAMES[(byte1 & 0b11) as usize]
+            };
             let ip_inc8 = i8::from_le_bytes([byte2]);
 
             writeln!(stdout, "{op_text} {ip_inc8}").unwrap();
+
+        // Debugging.
         } else {
             writeln!(stdout, "{byte1:8b}").unwrap();
         };
