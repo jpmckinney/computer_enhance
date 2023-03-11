@@ -75,13 +75,6 @@ fn run(filename: &str) -> Vec<String> {
 
         // +reg +r/m +disp -data ("Register/memory to/from register.").
         //
-        // mov bp, [1024]
-        // mov al, [bx + si]
-        // mov al, [bx + si + 1024]
-        // mov ax, [bx + di - 8]
-        // mov dx, [bp]
-        // mov si, bx
-        //
         // 100010 D W MOV
         if byte1 >> 2 == 0b100010
             // 00...0 D W ADD, etc.
@@ -134,13 +127,6 @@ fn run(filename: &str) -> Vec<String> {
             }
 
         // -reg +r/m +disp ?data ("Immediate to register/memory." "Register/memory.")
-        //
-        // mov [1024], byte 8
-        // mov [bx + si], byte 8
-        // mov [bx + si + 1024], word 2048
-        // mov [bx + di - 8], word 2048
-        // mov [bp], byte 8
-        // mov bx, word 2048
         //
         // TEST "Immediate data and register/memory" has the same first byte as NEG, etc.
         // so we need to put them all in this branch - but the latter do not have DATA bytes.
@@ -203,10 +189,8 @@ fn run(filename: &str) -> Vec<String> {
             }
 
         // +reg +data ("MOV Immediate to register.")
-        // 1011 W REG
         //
-        // mov cl, 8
-        // mov cx, 1024
+        // 1011 W REG
         } else if byte1 >> 4 == 0b1011 {
             let w = ((byte1 >> 3) & 1) as usize;
             let reg = (byte1 & 0b111) as usize;
@@ -220,8 +204,6 @@ fn run(filename: &str) -> Vec<String> {
 
         // Accumulator.
         //
-        // mov ax, [8]
-        // mov ax, [1024]
         // 101000 E W MOV
         } else if byte1 >> 2 == 0b101000
             // 00...1 0 W ADD, etc.
