@@ -28,6 +28,8 @@ repos:
           "-Dwarnings",
           "-Dclippy::pedantic",
           "-Dclippy::nursery",
-          "-Aclippy::unreadable-literal"
+          "-Aclippy::cognitive-complexity",
+          "-Aclippy::unreadable-literal",
+          "-Aclippy::too-many-lines",
         ]
         pass_filenames: false
