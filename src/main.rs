@@ -20,6 +20,11 @@ const JUMP4_NAMES: [&str; 16] = [
 ];
 const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
 
+fn next_u8(iterator: &mut Enumerate<Bytes<BufReader<File>>>) -> u8 {
+    let byte = iterator.next().unwrap().1.unwrap();
+    u8::from_le_bytes([byte])
+}
+
 fn next_i16(iterator: &mut Enumerate<Bytes<BufReader<File>>>, w: bool) -> i16 {
     let byte = iterator.next().unwrap().1.unwrap();
     if w {
@@ -213,7 +218,7 @@ fn run(filename: &str) -> Vec<String> {
 
             instructions.insert(position, format!("mov {reg_text}, {data}\n"));
 
-        // +data ("Memory to accumulator." "Accumulator to memory." "Immediate to accumulator.")
+        // Accumulator.
         //
         // mov ax, [8]
         // mov ax, [1024]
@@ -233,7 +238,7 @@ fn run(filename: &str) -> Vec<String> {
 
             // addr-lo | addr-hi or data | data if w = 1 or data-8
             let addr = if port {
-                i16::from(u8::from_le_bytes([iterator.next().unwrap().1.unwrap()]))
+                i16::from(next_u8(&mut iterator))
             } else {
                 next_i16(&mut iterator, mov || w)
             };
@@ -293,6 +298,18 @@ fn run(filename: &str) -> Vec<String> {
                 instructions.insert(position, format!("in {reg_text}, dx\n"));
             }
 
+        // RET.
+        } else if byte1 == 0b11000010 || byte1 == 0b11001010 {
+            let data = next_i16(&mut iterator, true);
+
+            instructions.insert(position, format!("ret {data}\n"));
+
+        // INT.
+        } else if byte1 == 0b11001101 {
+            let data = next_u8(&mut iterator);
+
+            instructions.insert(position, format!("int {data}\n"));
+
         // REP.
         } else if byte1 == 0b11110011 {
             let byte2 = iterator.next().unwrap().1.unwrap();
@@ -306,7 +323,7 @@ fn run(filename: &str) -> Vec<String> {
                 0b1010101 => "stos",
                 _ => unreachable!(),
             };
-            let unit = if w { "b" } else { "w" };
+            let unit = if w { "w" } else { "b" };
 
             instructions.insert(position, format!("rep {op_text}{unit}\n"));
 
@@ -355,6 +372,8 @@ fn run(filename: &str) -> Vec<String> {
                 0b00101111 => "das\n",
                 0b10011000 => "cbw\n",
                 0b10011001 => "cwd\n",
+                0b11000011 | 0b11001011 => "ret\n",
+                0b11001100 => "int\n",
                 0b11001110 => "into\n",
                 0b11001111 => "iret\n",
                 0b11111000 => "clc\n",
