@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 use std::env;
 use std::fs::File;
 use std::io::{self, BufReader, Bytes, Read, Write};
+use std::iter::Enumerate;
 
 const REG_NAMES: [[&str; 8]; 2] = [
     ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"],
@@ -18,10 +20,10 @@ const JUMP4_NAMES: [&str; 16] = [
 
 const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
 
-fn next_i16(iterator: &mut Bytes<BufReader<File>>, w: bool) -> i16 {
-    let byte = iterator.next().unwrap().unwrap();
+fn next_i16(iterator: &mut Enumerate<Bytes<BufReader<File>>>, w: bool) -> i16 {
+    let byte = iterator.next().unwrap().1.unwrap();
     if w {
-        i16::from_le_bytes([byte, iterator.next().unwrap().unwrap()])
+        i16::from_le_bytes([byte, iterator.next().unwrap().1.unwrap()])
     } else {
         i16::from(i8::from_le_bytes([byte]))
     }
@@ -35,7 +37,7 @@ const fn operation(byte: u8, mov: bool) -> &'static str {
     }
 }
 
-fn disassemble_r_m(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, r_m: usize) -> String {
+fn disassemble_r_m(iterator: &mut Enumerate<Bytes<BufReader<File>>>, w: usize, m0d: u8, r_m: usize) -> String {
     let disp = match m0d {
         // Memory mode. No displacement follows.*
         0b00 => {
@@ -61,13 +63,19 @@ fn disassemble_r_m(iterator: &mut Bytes<BufReader<File>>, w: usize, m0d: u8, r_m
     }
 }
 
-fn run<W: Write>(filename: &str, mut stdout: W) {
+fn run(filename: &str) -> Vec<String> {
     let file = BufReader::new(File::open(filename).unwrap());
-    let mut iterator = file.bytes();
+    let mut iterator = file.bytes().enumerate();
+    // Insert assembly instructions at byte indices.
+    let mut instructions = BTreeMap::new();
+    // Track the byte index of each label.
+    let mut labels = HashMap::new();
 
-    writeln!(stdout, "bits 16").unwrap();
+    while let Some((position, Ok(byte1))) = iterator.next() {
+        // Uncomment to just print bytes.
+        // println!("{byte1:8b}");
+        // continue;
 
-    while let Some(Ok(byte1)) = iterator.next() {
         // Register/memory to/from register.
         // 100010 D W MOV
         // 00###0 D W ADD, etc.
@@ -84,7 +92,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let w = (byte1 & 1) as usize;
 
             // MOD REG R/M
-            let byte2 = iterator.next().unwrap().unwrap();
+            let byte2 = iterator.next().unwrap().1.unwrap();
             let m0d = byte2 >> 6; // mod
             let reg = ((byte2 >> 3) & 0b111) as usize;
             let r_m = (byte2 & 0b111) as usize;
@@ -96,9 +104,9 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             // 1 = the REG field identifies the destination operand.
             // 0 = the REG field identifies the source operand.
             if d {
-                writeln!(stdout, "{op_text} {reg_text}, {r_m_text}").unwrap();
+                instructions.insert(position, format!("{op_text} {reg_text}, {r_m_text}"));
             } else {
-                writeln!(stdout, "{op_text} {r_m_text}, {reg_text}").unwrap();
+                instructions.insert(position, format!("{op_text} {r_m_text}, {reg_text}"));
             }
 
         // Immediate to register/memory.
@@ -121,7 +129,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let w = (byte1 & 1) as usize;
 
             // MOD ### R/M
-            let byte2 = iterator.next().unwrap().unwrap();
+            let byte2 = iterator.next().unwrap().1.unwrap();
             let m0d = byte2 >> 6; // mod
             let r_m = (byte2 & 0b111) as usize;
 
@@ -133,7 +141,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let op_text = operation(byte2, mov);
             let unit = if w == 1 { "word" } else { "byte" };
 
-            writeln!(stdout, "{op_text} {r_m_text}, {unit} {data}").unwrap();
+            instructions.insert(position, format!("{op_text} {r_m_text}, {unit} {data}"));
 
         // MOV Immediate to register.
         // 1011 W REG
@@ -149,7 +157,7 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
 
             let reg_text = REG_NAMES[w][reg];
 
-            writeln!(stdout, "mov {reg_text}, {data}").unwrap();
+            instructions.insert(position, format!("mov {reg_text}, {data}"));
 
         // Memory to accumulator. Accumulator to memory. Immediate to accumulator.
         // 101000 E W MOV
@@ -169,17 +177,17 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let reg_text = if w { "ax" } else { "al" };
 
             if !mov {
-                writeln!(stdout, "{op_text} {reg_text}, {addr}").unwrap();
+                instructions.insert(position, format!("{op_text} {reg_text}, {addr}"));
             } else if e {
-                writeln!(stdout, "{op_text} {reg_text}, [{addr}]").unwrap();
+                instructions.insert(position, format!("{op_text} {reg_text}, [{addr}]"));
             } else {
-                writeln!(stdout, "{op_text} [{addr}], {reg_text}").unwrap();
+                instructions.insert(position, format!("{op_text} [{addr}], {reg_text}"));
             }
 
         // 0111   JUMP
         // 111000 JUMP
         } else if byte1 >> 4 == 0b111 || byte1 >> 2 == 0b111000 {
-            let byte2 = iterator.next().unwrap().unwrap();
+            let byte2 = iterator.next().unwrap().1.unwrap();
 
             let op_text = if byte1 >> 4 == 0b111 {
                 JUMP4_NAMES[(byte1 & 0b1111) as usize]
@@ -188,18 +196,36 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             };
             let ip_inc8 = i8::from_le_bytes([byte2]);
 
-            writeln!(stdout, "{op_text} {ip_inc8}").unwrap();
+            // This instruction is two bytes.
+            let target = position.checked_add_signed(2 + ip_inc8 as isize).unwrap();
+            let length = labels.len();
+            let label = labels.entry(target).or_insert_with(|| format!("label{length}"));
+
+            instructions.insert(position, format!("{op_text} {label} ; {ip_inc8}"));
 
         // Debugging.
         } else {
-            writeln!(stdout, "{byte1:8b}").unwrap();
+            instructions.insert(position, format!("{byte1:8b}"));
         };
     }
+
+    for (position, label) in labels {
+        let prefix = format!("{label}:\n");
+        instructions.get_mut(&position).unwrap().insert_str(0, &prefix);
+    }
+    if !instructions.is_empty() {
+        instructions.get_mut(&0).unwrap().insert_str(0, "bits 16\n");
+    }
+
+    instructions.into_values().collect()
 }
 
 fn main() {
     let filename = env::args().nth(1).unwrap();
-    run(&filename, &mut io::stdout().lock());
+    let mut stdout = io::stdout().lock();
+    for line in run(&filename) {
+        writeln!(stdout, "{line}").unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -217,7 +243,9 @@ mod tests {
         let binary_path = dir.path().join("test");
         let mut assembly_file = File::create(assembly_path.clone()).unwrap();
 
-        run(test_path, &mut assembly_file);
+        for line in run(test_path) {
+            writeln!(assembly_file, "{line}").unwrap();
+        }
 
         let mut text = vec![];
         File::open(assembly_path.clone())
