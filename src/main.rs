@@ -126,13 +126,12 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             let r_m = (byte2 & 0b111) as usize;
 
             let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
-            let wide = (mov || s == 0) && w == 1;
 
             // data | data if w = 1 or data | data if sw = 01
-            let data = next_i16(&mut iterator, wide);
+            let data = next_i16(&mut iterator, (mov || s == 0) && w == 1);
 
             let op_text = operation(byte2, mov);
-            let unit = if wide { "word" } else { "byte" };
+            let unit = if w == 1 { "word" } else { "byte" };
 
             writeln!(stdout, "{op_text} {r_m_text}, {unit} {data}").unwrap();
 
