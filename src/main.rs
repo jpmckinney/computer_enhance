@@ -12,9 +12,9 @@ const REG_NAMES: [[&str; 8]; 2] = [
 const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 const SEGMENT_NAMES: [&str; 4] = ["es", "cs", "ss", "ds"];
 const UNARY2_NAMES: [&str; 4] = ["inc", "dec", "push", "pop"];
-const UNARY3_NAMES: [&str; 8] = ["test", "xxx", "not", "neg", "mul", "imul", "div", "idiv"];
+const UNARY3_NAMES: [&str; 8] = ["test", "XXX", "not", "neg", "mul", "imul", "div", "idiv"];
 const BINARY_NAMES: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
-const LOGIC_NAMES: [&str; 8] = ["rol", "ror", "rcl", "rcr", "shl", "shr", "xxx", "sar"];
+const LOGIC_NAMES: [&str; 8] = ["rol", "ror", "rcl", "rcr", "shl", "shr", "XXX", "sar"];
 const JUMP4_NAMES: [&str; 16] = [
     "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle",
 ];
@@ -73,14 +73,16 @@ fn run(filename: &str) -> Vec<String> {
         // println!("{byte1:8b}");
         // continue;
 
-        // +reg +r/m +disp -data ("Register/memory to/from register.").
+        // "Register/memory to/from register." "Reg/memory with register to either."
+        // "Register/memory with register." "Register/memory and register."
+        // "Load EA to register." "Load pointer to DS/ES."
         //
         // 100010 D W MOV
         if byte1 >> 2 == 0b100010
             // 00...0 D W ADD, etc.
             || (byte1 >> 2) & 0b110001 == 0
             // 100001 0 W TEST
-            || (byte1 >> 1) == 0b1000010
+            || byte1 >> 1 == 0b1000010
             // 100001 1 W XCHG
             || byte1 >> 1 == 0b1000011
             // LEA
@@ -126,7 +128,7 @@ fn run(filename: &str) -> Vec<String> {
                 instructions.insert(position, format!("{op_text} {r_m_text}, {reg_text}\n"));
             }
 
-        // -reg +r/m +disp ?data ("Immediate to register/memory." "Register/memory.")
+        // "Immediate to register/memory." "Register/memory." "Immediate data and register/memory."
         //
         // TEST "Immediate data and register/memory" has the same first byte as NEG, etc.
         // so we need to put them all in this branch - but the latter do not have DATA bytes.
@@ -136,11 +138,9 @@ fn run(filename: &str) -> Vec<String> {
             // 100000 S W ADD, etc.
             // 100000 0 W AND
             // 100000 0 W OR
-            //
             // It's OK to treat AND and OR as having an S bit.
             || byte1 >> 2 == 0b100000
             // The following do not have DATA bytes.
-            //
             // 100011 1 1 POP
             || byte1 == 0b10001111
             // 111111 1 1 PUSH
@@ -188,7 +188,7 @@ fn run(filename: &str) -> Vec<String> {
                 instructions.insert(position, format!("{op_text} {unit} {r_m_text}\n"));
             }
 
-        // +reg +data ("MOV Immediate to register.")
+        // MOV Immediate to register.
         //
         // 1011 W REG
         } else if byte1 >> 4 == 0b1011 {
@@ -232,13 +232,13 @@ fn run(filename: &str) -> Vec<String> {
                 0b1110011 => "out",
                 _ => BINARY_NAMES[((byte1 >> 3) & 0b111) as usize],
             };
-            let reg_text = if w { "ax" } else { "al" };
+            let acc_text = if w { "ax" } else { "al" };
             let addr_text = if mov { format!("[{addr}]") } else { addr.to_string() };
 
             if e {
-                instructions.insert(position, format!("{op_text} {reg_text}, {addr_text}\n"));
+                instructions.insert(position, format!("{op_text} {acc_text}, {addr_text}\n"));
             } else {
-                instructions.insert(position, format!("{op_text} {addr_text}, {reg_text}\n"));
+                instructions.insert(position, format!("{op_text} {addr_text}, {acc_text}\n"));
             }
 
         // PUSH POP INC DEC Register. One byte: 010 .. REG
@@ -259,7 +259,7 @@ fn run(filename: &str) -> Vec<String> {
 
             instructions.insert(position, format!("{op_text} {sg_text}\n"));
 
-        // XCHG Register with accumulator. One byte: 10010 REG
+        // XCHG Accumulator. One byte: 10010 REG
         } else if (byte1 >> 3) == 0b10010 {
             let reg = (byte1 & 0b111) as usize;
 
@@ -267,32 +267,32 @@ fn run(filename: &str) -> Vec<String> {
 
             instructions.insert(position, format!("xchg ax, {reg_text}\n"));
 
-        // IN OUT Variable port. One byte: 111011 . W
+        // IN OUT Accumulator. One byte: 111011 . W
         } else if (byte1 >> 2) == 0b111011 {
             let out = (byte1 >> 1) & 1 == 1;
             let w = byte1 & 1 == 1;
 
-            let reg_text = if w { "ax" } else { "al" };
+            let acc_text = if w { "ax" } else { "al" };
 
             if out {
-                instructions.insert(position, format!("out dx, {reg_text}\n"));
+                instructions.insert(position, format!("out dx, {acc_text}\n"));
             } else {
-                instructions.insert(position, format!("in {reg_text}, dx\n"));
+                instructions.insert(position, format!("in {acc_text}, dx\n"));
             }
 
-        // RET.
+        // RET. Fixed byte plus i16 data.
         } else if byte1 == 0b11000010 || byte1 == 0b11001010 {
             let data = next_i16(&mut iterator, true);
 
             instructions.insert(position, format!("ret {data}\n"));
 
-        // INT.
+        // INT. Fixed byte plus u8 data.
         } else if byte1 == 0b11001101 {
             let data = next_u8(&mut iterator);
 
             instructions.insert(position, format!("int {data}\n"));
 
-        // REP.
+        // REP. Fixed byte plus lookup table.
         } else if byte1 == 0b11110011 {
             let byte2 = iterator.next().unwrap().1.unwrap();
             let w = byte2 & 1 == 1;
