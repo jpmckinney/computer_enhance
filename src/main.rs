@@ -252,7 +252,7 @@ fn run(filename: &str) -> Vec<String> {
             let e = (byte1 >> 1) & 1 == 0; // opposite of d
             let w = byte1 & 1 == 1;
 
-            let addr = if in_out {
+            let data = if in_out {
                 // data-8
                 i16::from(next_u8(&mut iterator))
             } else {
@@ -269,12 +269,12 @@ fn run(filename: &str) -> Vec<String> {
             };
             let acc_text = if w { "ax" } else { "al" };
             // MOV does "memory to accumulator", others do "immediate to accumulator".
-            let addr_text = if mov { format!("[{addr}]") } else { addr.to_string() };
+            let data_text = if mov { format!("[{data}]") } else { data.to_string() };
 
             if e {
-                instructions.insert(position, format!("{op_text} {acc_text}, {addr_text}\n"));
+                instructions.insert(position, format!("{op_text} {acc_text}, {data_text}\n"));
             } else {
-                instructions.insert(position, format!("{op_text} {addr_text}, {acc_text}\n"));
+                instructions.insert(position, format!("{op_text} {data_text}, {acc_text}\n"));
             }
 
         // PUSH POP INC DEC Register. One byte: 010 OP REG
@@ -445,9 +445,8 @@ fn run(filename: &str) -> Vec<String> {
                 }
                 _ => "",
             };
-            // Debugging.
             if op_text.is_empty() {
-                instructions.insert(position, format!("; {byte1:8b}\n"));
+                instructions.insert(position, format!("; {byte1:8b}\n")); // debugging
             } else {
                 instructions.insert(position, op_text.to_string());
             }
@@ -463,7 +462,7 @@ fn run(filename: &str) -> Vec<String> {
         instructions
             .entry(position)
             .and_modify(|string| string.insert_str(0, &format!("{label}:\n")))
-            .or_insert_with(|| format!("; {position}: {label}\n"));
+            .or_insert_with(|| format!("; {position}: {label}\n")); // debugging
     }
     if !instructions.is_empty() {
         instructions
