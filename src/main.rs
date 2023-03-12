@@ -74,6 +74,8 @@ fn run(filename: &str) -> Vec<String> {
     let mut instructions = BTreeMap::new();
     // Track the byte index of each label.
     let mut labels = HashMap::new();
+    // Segment override.
+    let mut segment = "";
     // Override the order of operands to avoid "instruction is not lockable".
     let mut locked = false;
     let mut release_lock = false;
@@ -132,7 +134,11 @@ fn run(filename: &str) -> Vec<String> {
             };
 
             let reg_text = REG_NAMES[w][reg];
-            let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
+            let mut r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
+            if !segment.is_empty() {
+                r_m_text = format!("{segment}:{r_m_text}");
+                segment = "";
+            }
 
             // 1 = the REG field identifies the destination operand.
             // 0 = the REG field identifies the source operand.
@@ -178,7 +184,11 @@ fn run(filename: &str) -> Vec<String> {
             let r_m = (byte2 & 0b111) as usize;
 
             let mov_test = group == 0b110001 || group == 0b111101 && (byte2 >> 3).trailing_zeros() >= 3;
-            let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
+            let mut r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
+            if !segment.is_empty() {
+                r_m_text = format!("{segment}:{r_m_text}");
+                segment = "";
+            }
 
             let op_text = match group {
                 0b100011 => "pop",
@@ -278,6 +288,12 @@ fn run(filename: &str) -> Vec<String> {
             let op_text = if (byte1 & 1) == 0 { "push" } else { "pop" };
 
             instructions.insert(position, format!("{op_text} {sg_text}\n"));
+
+        // SEGMENT.
+        } else if (byte1 & 0b11100111) == 0b100110 {
+            let sg = ((byte1 >> 3) & 0b11) as usize;
+
+            segment = SEGMENT_NAMES[sg];
 
         // XCHG Accumulator. One byte: 10010 REG
         } else if (byte1 >> 3) == 0b10010 {
@@ -438,7 +454,10 @@ fn run(filename: &str) -> Vec<String> {
             .or_insert_with(|| format!("; {position}: {label}\n"));
     }
     if !instructions.is_empty() {
-        instructions.get_mut(&0).unwrap().insert_str(0, "bits 16\n");
+        instructions
+            .entry(0)
+            .and_modify(|string| string.insert_str(0, "bits 16\n"))
+            .or_insert_with(|| String::from("bits 16\n"));
     }
 
     instructions.into_values().collect()
