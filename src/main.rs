@@ -15,10 +15,10 @@ const UNARY2_NAMES: [&str; 4] = ["inc", "dec", "push", "pop"];
 const UNARY3_NAMES: [&str; 8] = ["test", "XXX", "not", "neg", "mul", "imul", "div", "idiv"];
 const BINARY_NAMES: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
 const LOGIC_NAMES: [&str; 8] = ["rol", "ror", "rcl", "rcr", "shl", "shr", "XXX", "sar"];
+const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
 const JUMP4_NAMES: [&str; 16] = [
     "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle",
 ];
-const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
 
 fn next_u8(iterator: &mut Enumerate<Bytes<BufReader<File>>>) -> u8 {
     let byte = iterator.next().unwrap().1.unwrap();
@@ -67,11 +67,18 @@ fn run(filename: &str) -> Vec<String> {
     let mut instructions = BTreeMap::new();
     // Track the byte index of each label.
     let mut labels = HashMap::new();
+    // Override the order of operands to avoid "instruction is not lockable".
+    let mut locked = false;
+    let mut release_lock = false;
 
     while let Some((position, Ok(byte1))) = iterator.next() {
         // Uncomment to just print bytes.
         // println!("{byte1:8b}");
         // continue;
+
+        if locked {
+            release_lock = true;
+        }
 
         // "Register/memory to/from register." "Reg/memory with register to either."
         // "Register/memory with register." "Register/memory and register."
@@ -122,7 +129,7 @@ fn run(filename: &str) -> Vec<String> {
 
             // 1 = the REG field identifies the destination operand.
             // 0 = the REG field identifies the source operand.
-            if d == 1 {
+            if d == 1 && !locked {
                 instructions.insert(position, format!("{op_text} {reg_text}, {r_m_text}\n"));
             } else {
                 instructions.insert(position, format!("{op_text} {r_m_text}, {reg_text}\n"));
@@ -138,9 +145,9 @@ fn run(filename: &str) -> Vec<String> {
             // 100000 S W ADD, etc.
             // 100000 0 W AND
             // 100000 0 W OR
-            // It's OK to treat AND and OR as having an S bit.
+            // It's OK to treat AND and OR as having an S bit (of 0).
             || byte1 >> 2 == 0b100000
-            // The following do not have DATA bytes.
+            // The following do not have DATA bytes, except TEST.
             // 100011 1 1 POP
             || byte1 == 0b10001111
             // 111111 1 1 PUSH
@@ -153,8 +160,7 @@ fn run(filename: &str) -> Vec<String> {
             || byte1 >> 2 == 0b110100
         {
             let op = byte1 >> 2;
-            let mov = op == 0b110001;
-            let s_v = (byte1 >> 1) & 1;
+            let s_v = (byte1 >> 1) & 1; // s or v
             let w = (byte1 & 1) as usize;
 
             // MOD ... R/M
@@ -162,6 +168,7 @@ fn run(filename: &str) -> Vec<String> {
             let m0d = byte2 >> 6; // mod
             let r_m = (byte2 & 0b111) as usize;
 
+            let mov_test = op == 0b110001 || op == 0b111101 && (byte2 >> 3).trailing_zeros() >= 3;
             let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
 
             let op_text = match op {
@@ -176,9 +183,9 @@ fn run(filename: &str) -> Vec<String> {
             let unit = if w == 1 { "word" } else { "byte" };
 
             // Binary operators (MOV, TEST, ADD, etc.) have DATA bytes.
-            if op == 0b110001 || op == 0b100000 || op == 0b111101 && (byte2 >> 3).trailing_zeros() >= 3 {
-                // data | data if w = 1 or data | data if sw = 01
-                let data = next_i16(&mut iterator, (mov || s_v == 0) && w == 1);
+            if mov_test || op == 0b100000 {
+                // data | data if w = 1 for MOV and TEST. data | data if sw = 01 for ADD, etc.
+                let data = next_i16(&mut iterator, (mov_test || s_v == 0) && w == 1);
                 instructions.insert(position, format!("{op_text} {r_m_text}, {unit} {data}\n"));
             } else if op == 0b110100 {
                 // 0 = Shift/rotate count is one. 1 = Shift/rotate count is specified in CL register.
@@ -367,16 +374,24 @@ fn run(filename: &str) -> Vec<String> {
                 0b11111011 => "sti\n",
                 0b11110100 => "hlt\n",
                 0b10011011 => "wait\n",
-                0b11110000 => "lock ",
+                0b11110000 => {
+                    locked = true;
+                    "lock "
+                }
                 _ => "",
             };
+            // Debugging.
             if op_text.is_empty() {
-                // Debugging.
                 instructions.insert(position, format!("{byte1:8b}\n"));
             } else {
                 instructions.insert(position, op_text.to_string());
             }
         };
+
+        if release_lock {
+            locked = false;
+            release_lock = false;
+        }
     }
 
     for (position, label) in labels {
