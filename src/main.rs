@@ -5,16 +5,18 @@ use std::fs::File;
 use std::io::{self, BufReader, Bytes, Read, Write};
 use std::iter::Enumerate;
 
+// "N/A" indices are "(not used)" according to the manual.
 const REG_NAMES: [[&str; 8]; 2] = [
     ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"],
     ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
 ];
 const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 const SEGMENT_NAMES: [&str; 4] = ["es", "cs", "ss", "ds"];
-const UNARY2_NAMES: [&str; 4] = ["inc", "dec", "push", "pop"];
-const UNARY3_NAMES: [&str; 8] = ["test", "XXX", "not", "neg", "mul", "imul", "div", "idiv"];
+const NAMES_010: [&str; 4] = ["inc", "dec", "push", "pop"];
+const NAMES_111101: [&str; 8] = ["test", "N/A", "not", "neg", "mul", "imul", "div", "idiv"];
+const NAMES_11111111: [&str; 8] = ["inc", "dec", "call", "call", "jmp", "jmp", "push", "N/A"];
 const BINARY_NAMES: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
-const LOGIC_NAMES: [&str; 8] = ["rol", "ror", "rcl", "rcr", "shl", "shr", "XXX", "sar"];
+const LOGIC_NAMES: [&str; 8] = ["rol", "ror", "rcl", "rcr", "shl", "shr", "N/A", "sar"];
 const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
 const JUMP4_NAMES: [&str; 16] = [
     "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle",
@@ -23,6 +25,11 @@ const JUMP4_NAMES: [&str; 16] = [
 fn next_u8(iterator: &mut Enumerate<Bytes<BufReader<File>>>) -> u8 {
     let byte = iterator.next().unwrap().1.unwrap();
     u8::from_le_bytes([byte])
+}
+
+fn next_i8(iterator: &mut Enumerate<Bytes<BufReader<File>>>) -> i8 {
+    let byte = iterator.next().unwrap().1.unwrap();
+    i8::from_le_bytes([byte])
 }
 
 fn next_i16(iterator: &mut Enumerate<Bytes<BufReader<File>>>, w: bool) -> i16 {
@@ -136,6 +143,7 @@ fn run(filename: &str) -> Vec<String> {
             }
 
         // "Immediate to register/memory." "Register/memory." "Immediate data and register/memory."
+        // "Indirect within segment."
         //
         // TEST "Immediate data and register/memory" has the same first byte as NEG, etc.
         // so we need to put them all in this branch - but the latter do not have DATA bytes.
@@ -150,7 +158,7 @@ fn run(filename: &str) -> Vec<String> {
             // The following do not have DATA bytes, except TEST.
             // 100011 1 1 POP
             || byte1 == 0b10001111
-            // 111111 1 1 PUSH
+            // 111111 1 1 PUSH, CALL, JMP
             || byte1 == 0b11111111
             // 111111 1 W INC, DEC
             || byte1 >> 1 == 0b1111111
@@ -159,38 +167,43 @@ fn run(filename: &str) -> Vec<String> {
             // 110100 V W SHL SHR SAR ROL ROR RCL RCR
             || byte1 >> 2 == 0b110100
         {
-            let op = byte1 >> 2;
+            let group = byte1 >> 2;
             let s_v = (byte1 >> 1) & 1; // s or v
             let w = (byte1 & 1) as usize;
 
             // MOD ... R/M
             let byte2 = iterator.next().unwrap().1.unwrap();
             let m0d = byte2 >> 6; // mod
+            let op = ((byte2 >> 3) & 0b111) as usize;
             let r_m = (byte2 & 0b111) as usize;
 
-            let mov_test = op == 0b110001 || op == 0b111101 && (byte2 >> 3).trailing_zeros() >= 3;
+            let mov_test = group == 0b110001 || group == 0b111101 && (byte2 >> 3).trailing_zeros() >= 3;
             let r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
 
-            let op_text = match op {
-                0b110001 => "mov",
+            let op_text = match group {
                 0b100011 => "pop",
-                0b100000 => BINARY_NAMES[((byte2 >> 3) & 0b111) as usize],
-                0b111111 => UNARY2_NAMES[((byte2 >> 3) & 0b11) as usize],
-                0b111101 => UNARY3_NAMES[((byte2 >> 3) & 0b111) as usize],
-                0b110100 => LOGIC_NAMES[((byte2 >> 3) & 0b111) as usize],
+                0b110001 => "mov",
+                0b100000 => BINARY_NAMES[op],
+                0b110100 => LOGIC_NAMES[op],
+                0b111101 => NAMES_111101[op],
+                0b111111 => NAMES_11111111[op],
                 _ => unreachable!(),
             };
             let unit = if w == 1 { "word" } else { "byte" };
 
-            // Binary operators (MOV, TEST, ADD, etc.) have DATA bytes.
-            if mov_test || op == 0b100000 {
+            // Binary instructions (MOV, TEST, ADD, etc.) have DATA bytes.
+            if mov_test || group == 0b100000 {
                 // data | data if w = 1 for MOV and TEST. data | data if sw = 01 for ADD, etc.
                 let data = next_i16(&mut iterator, (mov_test || s_v == 0) && w == 1);
                 instructions.insert(position, format!("{op_text} {r_m_text}, {unit} {data}\n"));
-            } else if op == 0b110100 {
+            // Logic instructions.
+            } else if group == 0b110100 {
                 // 0 = Shift/rotate count is one. 1 = Shift/rotate count is specified in CL register.
                 let count = if s_v == 0 { "1" } else { "cl" };
                 instructions.insert(position, format!("{op_text} {unit} {r_m_text}, {count}\n"));
+            // Jump instructions. "Indirect intersegment."
+            } else if byte1 == 0b11111111 && (op == 0b011 || op == 0b101) {
+                instructions.insert(position, format!("{op_text} {unit} far {r_m_text}\n"));
             } else {
                 instructions.insert(position, format!("{op_text} {unit} {r_m_text}\n"));
             }
@@ -253,7 +266,7 @@ fn run(filename: &str) -> Vec<String> {
             let reg = (byte1 & 0b111) as usize;
 
             let reg_text = REG_NAMES[1][reg];
-            let op_text = UNARY2_NAMES[((byte1 >> 3) & 0b11) as usize];
+            let op_text = NAMES_010[((byte1 >> 3) & 0b11) as usize];
 
             instructions.insert(position, format!("{op_text} {reg_text}\n"));
 
@@ -316,24 +329,48 @@ fn run(filename: &str) -> Vec<String> {
 
             instructions.insert(position, format!("rep {op_text}{unit}\n"));
 
-        // 0111   JUMP
-        // 111000 JUMP
-        } else if byte1 >> 4 == 0b111 || byte1 >> 2 == 0b111000 {
-            let byte2 = iterator.next().unwrap().1.unwrap();
+        // 0111     JUMP
+        // 111000   JUMP
+        // 11101011 JMP Direct within segment-short
+        } else if byte1 >> 4 == 0b111 || byte1 >> 2 == 0b111000 || byte1 == 0b11101011 {
+            let ip_inc8 = next_i8(&mut iterator);
 
-            let op_text = if byte1 >> 4 == 0b111 {
-                JUMP4_NAMES[(byte1 & 0b1111) as usize]
-            } else {
+            let op_text = if byte1 == 0b11101011 {
+                "jmp"
+            } else if byte1 >> 2 == 0b111000 {
                 JUMP2_NAMES[(byte1 & 0b11) as usize]
+            } else {
+                JUMP4_NAMES[(byte1 & 0b1111) as usize]
             };
-            let ip_inc8 = i8::from_le_bytes([byte2]);
 
-            // This instruction is two bytes.
+            // This instruction is 2 bytes.
             let target = position.checked_add_signed(2 + ip_inc8 as isize).unwrap();
             let length = labels.len();
             let label = labels.entry(target).or_insert_with(|| format!("label{length}"));
 
-            instructions.insert(position, format!("{op_text} {label} ; {ip_inc8}\n"));
+            instructions.insert(position, format!("{op_text} {label} ; {ip_inc8} short\n"));
+
+        // CALL JMP Direct within segment.
+        } else if byte1 >> 1 == 0b1110100 {
+            let ip_inc = next_i16(&mut iterator, true);
+
+            let op_text = if byte1 & 1 == 0 { "call" } else { "jmp" };
+
+            // This instruction is 3 bytes.
+            let target = position.checked_add_signed(3 + ip_inc as isize).unwrap();
+            let length = labels.len();
+            let label = labels.entry(target).or_insert_with(|| format!("label{length}"));
+
+            instructions.insert(position, format!("{op_text} {label} ; {ip_inc}\n"));
+
+        // CALL JMP Direct intersegment.
+        } else if byte1 == 0b10011010 || byte1 == 0b11101010 {
+            let ip = next_i16(&mut iterator, true);
+            let cs = next_i16(&mut iterator, true);
+
+            let op_text = if byte1 == 0b10011010 { "call" } else { "jmp" };
+
+            instructions.insert(position, format!("{op_text} {cs}:{ip}\n"));
 
         // Two fixed bytes.
         } else if byte1 == 0b11010100 || byte1 == 0b11010101 {
@@ -382,7 +419,7 @@ fn run(filename: &str) -> Vec<String> {
             };
             // Debugging.
             if op_text.is_empty() {
-                instructions.insert(position, format!("{byte1:8b}\n"));
+                instructions.insert(position, format!("; {byte1:8b}\n"));
             } else {
                 instructions.insert(position, op_text.to_string());
             }
@@ -395,8 +432,10 @@ fn run(filename: &str) -> Vec<String> {
     }
 
     for (position, label) in labels {
-        let prefix = format!("{label}:\n");
-        instructions.get_mut(&position).unwrap().insert_str(0, &prefix);
+        instructions
+            .entry(position)
+            .and_modify(|string| string.insert_str(0, &format!("{label}:\n")))
+            .or_insert_with(|| format!("; {position}: {label}\n"));
     }
     if !instructions.is_empty() {
         instructions.get_mut(&0).unwrap().insert_str(0, "bits 16\n");
