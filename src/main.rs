@@ -5,18 +5,23 @@ use std::fs::File;
 use std::io::{self, BufReader, Bytes, Read, Write};
 use std::iter::Enumerate;
 
-// "N/A" indices are "(not used)" according to the manual.
 const REG_NAMES: [[&str; 8]; 2] = [
     ["al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"],
     ["ax", "cx", "dx", "bx", "sp", "bp", "si", "di"],
 ];
 const R_M_NAMES: [&str; 8] = ["bx + si", "bx + di", "bp + si", "bp + di", "si", "di", "bp", "bx"];
 const SEGMENT_NAMES: [&str; 4] = ["es", "cs", "ss", "ds"];
-const NAMES_010: [&str; 4] = ["inc", "dec", "push", "pop"];
-const NAMES_111101: [&str; 8] = ["test", "N/A", "not", "neg", "mul", "imul", "div", "idiv"];
-const NAMES_11111111: [&str; 8] = ["inc", "dec", "call", "call", "jmp", "jmp", "push", "N/A"];
+
+// "N/A" indices are "(not used)" according to the manual.
+const ASCII_ADJUST_NAMES: [&str; 2] = ["aam", "aad"];
 const BINARY_NAMES: [&str; 8] = ["add", "or", "adc", "sbb", "and", "sub", "xor", "cmp"];
+const CALL_NAMES: [&str; 2] = ["call", "jmp"];
 const LOGIC_NAMES: [&str; 8] = ["rol", "ror", "rcl", "rcr", "shl", "shr", "N/A", "sar"];
+const STACK_NAMES: [&str; 2] = ["push", "pop"];
+const UNARY_NAMES: [&str; 4] = ["inc", "dec", "push", "pop"];
+// I don't know what unifies these two groups of instructions, other than their first byte.
+const NAMES_1111011W: [&str; 8] = ["test", "N/A", "not", "neg", "mul", "imul", "div", "idiv"];
+const NAMES_11111111: [&str; 8] = ["inc", "dec", "call", "call", "jmp", "jmp", "push", "N/A"];
 const JUMP2_NAMES: [&str; 4] = ["loopnz", "loopz", "loop", "jcxz"];
 const JUMP4_NAMES: [&str; 16] = [
     "jo", "jno", "jb", "jnb", "je", "jne", "jbe", "jnbe", "js", "jns", "jp", "jnp", "jl", "jnl", "jle", "jnle",
@@ -95,7 +100,7 @@ fn run(filename: &str) -> Vec<String> {
         //
         // 100010 D W MOV
         if byte1 >> 2 == 0b100010
-            // 00...0 D W ADD, etc.
+            // 00...0 D W ADC, ADD, AND, CMP, OR, SBB, SUB, XOR
             || (byte1 >> 2) & 0b110001 == 0
             // 100001 0 W TEST
             || byte1 >> 1 == 0b1000010
@@ -132,7 +137,6 @@ fn run(filename: &str) -> Vec<String> {
                     _ => BINARY_NAMES[((byte1 >> 3) & 0b111) as usize],
                 },
             };
-
             let reg_text = REG_NAMES[w][reg];
             let mut r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
             if !segment.is_empty() {
@@ -156,7 +160,7 @@ fn run(filename: &str) -> Vec<String> {
         //
         // 110001 1 W MOV
         } else if byte1 >> 1 == 0b1100011
-            // 100000 S W ADD, etc.
+            // 100000 S W ADC, ADD, AND, CMP, OR, SBB, SUB, XOR
             // 100000 0 W AND
             // 100000 0 W OR
             // It's OK to treat AND and OR as having an S bit (of 0).
@@ -177,45 +181,45 @@ fn run(filename: &str) -> Vec<String> {
             let s_v = (byte1 >> 1) & 1; // s or v
             let w = (byte1 & 1) as usize;
 
-            // MOD ... R/M
+            // MOD OP R/M
             let byte2 = iterator.next().unwrap().1.unwrap();
             let m0d = byte2 >> 6; // mod
             let op = ((byte2 >> 3) & 0b111) as usize;
             let r_m = (byte2 & 0b111) as usize;
 
             let mov_test = group == 0b110001 || group == 0b111101 && (byte2 >> 3).trailing_zeros() >= 3;
-            let mut r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
-            if !segment.is_empty() {
-                r_m_text = format!("{segment}:{r_m_text}");
-                segment = "";
-            }
 
             let op_text = match group {
                 0b100011 => "pop",
                 0b110001 => "mov",
                 0b100000 => BINARY_NAMES[op],
                 0b110100 => LOGIC_NAMES[op],
-                0b111101 => NAMES_111101[op],
+                0b111101 => NAMES_1111011W[op],
                 0b111111 => NAMES_11111111[op],
                 _ => unreachable!(),
             };
-            let unit = if w == 1 { "word" } else { "byte" };
+            let unit_text = if w == 1 { "word" } else { "byte" };
+            let mut r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
+            if !segment.is_empty() {
+                r_m_text = format!("{segment}:{r_m_text}");
+                segment = "";
+            }
 
             // Binary instructions (MOV, TEST, ADD, etc.) have DATA bytes.
             if mov_test || group == 0b100000 {
                 // data | data if w = 1 for MOV and TEST. data | data if sw = 01 for ADD, etc.
                 let data = next_i16(&mut iterator, (mov_test || s_v == 0) && w == 1);
-                instructions.insert(position, format!("{op_text} {r_m_text}, {unit} {data}\n"));
+                instructions.insert(position, format!("{op_text} {r_m_text}, {unit_text} {data}\n"));
             // Logic instructions.
             } else if group == 0b110100 {
                 // 0 = Shift/rotate count is one. 1 = Shift/rotate count is specified in CL register.
                 let count = if s_v == 0 { "1" } else { "cl" };
-                instructions.insert(position, format!("{op_text} {unit} {r_m_text}, {count}\n"));
+                instructions.insert(position, format!("{op_text} {unit_text} {r_m_text}, {count}\n"));
             // Jump instructions. "Indirect intersegment."
             } else if byte1 == 0b11111111 && (op == 0b011 || op == 0b101) {
-                instructions.insert(position, format!("{op_text} {unit} far {r_m_text}\n"));
+                instructions.insert(position, format!("{op_text} {unit_text} far {r_m_text}\n"));
             } else {
-                instructions.insert(position, format!("{op_text} {unit} {r_m_text}\n"));
+                instructions.insert(position, format!("{op_text} {unit_text} {r_m_text}\n"));
             }
 
         // MOV Immediate to register.
@@ -236,7 +240,7 @@ fn run(filename: &str) -> Vec<String> {
         //
         // 101000 E W MOV
         } else if byte1 >> 2 == 0b101000
-            // 00...1 0 W ADD, etc.
+            // 00...1 0 W ADC, ADD, AND, CMP, OR, SBB, SUB, XOR
             || (byte1 >> 1) & 0b1100011 == 0b10
             // 101010 0 W TEST
             || (byte1 >> 1) == 0b1010100
@@ -244,14 +248,15 @@ fn run(filename: &str) -> Vec<String> {
             || (byte1 >> 2) == 0b111001
         {
             let mov = byte1 >> 2 == 0b101000;
-            let port = (byte1 >> 2) == 0b111001;
+            let in_out = byte1 >> 2 == 0b111001;
             let e = (byte1 >> 1) & 1 == 0; // opposite of d
             let w = byte1 & 1 == 1;
 
-            // addr-lo | addr-hi or data | data if w = 1 or data-8
-            let addr = if port {
+            let addr = if in_out {
+                // data-8
                 i16::from(next_u8(&mut iterator))
             } else {
+                // addr-lo | addr-hi or data | data if w = 1
                 next_i16(&mut iterator, mov || w)
             };
 
@@ -263,6 +268,7 @@ fn run(filename: &str) -> Vec<String> {
                 _ => BINARY_NAMES[((byte1 >> 3) & 0b111) as usize],
             };
             let acc_text = if w { "ax" } else { "al" };
+            // MOV does "memory to accumulator", others do "immediate to accumulator".
             let addr_text = if mov { format!("[{addr}]") } else { addr.to_string() };
 
             if e {
@@ -271,21 +277,23 @@ fn run(filename: &str) -> Vec<String> {
                 instructions.insert(position, format!("{op_text} {addr_text}, {acc_text}\n"));
             }
 
-        // PUSH POP INC DEC Register. One byte: 010 .. REG
+        // PUSH POP INC DEC Register. One byte: 010 OP REG
         } else if (byte1 >> 5) == 0b010 {
+            let op = ((byte1 >> 3) & 0b11) as usize;
             let reg = (byte1 & 0b111) as usize;
 
             let reg_text = REG_NAMES[1][reg];
-            let op_text = NAMES_010[((byte1 >> 3) & 0b11) as usize];
+            let op_text = UNARY_NAMES[op];
 
             instructions.insert(position, format!("{op_text} {reg_text}\n"));
 
-        // PUSH POP Segment register. One byte: 000 SG 11 .
+        // PUSH POP Segment register. One byte: 000 SG 11 OP
         } else if (byte1 & 0b11100111) == 0b110 || (byte1 & 0b11100111) == 0b111 {
             let sg = ((byte1 >> 3) & 0b11) as usize;
+            let op = (byte1 & 1) as usize;
 
             let sg_text = SEGMENT_NAMES[sg];
-            let op_text = if (byte1 & 1) == 0 { "push" } else { "pop" };
+            let op_text = STACK_NAMES[op];
 
             instructions.insert(position, format!("{op_text} {sg_text}\n"));
 
@@ -341,9 +349,9 @@ fn run(filename: &str) -> Vec<String> {
                 0b1010101 => "stos",
                 _ => unreachable!(),
             };
-            let unit = if w { "w" } else { "b" };
+            let unit_text = if w { "w" } else { "b" };
 
-            instructions.insert(position, format!("rep {op_text}{unit}\n"));
+            instructions.insert(position, format!("rep {op_text}{unit_text}\n"));
 
         // 0111     JUMP
         // 111000   JUMP
@@ -351,12 +359,10 @@ fn run(filename: &str) -> Vec<String> {
         } else if byte1 >> 4 == 0b111 || byte1 >> 2 == 0b111000 || byte1 == 0b11101011 {
             let ip_inc8 = next_i8(&mut iterator);
 
-            let op_text = if byte1 == 0b11101011 {
-                "jmp"
-            } else if byte1 >> 2 == 0b111000 {
-                JUMP2_NAMES[(byte1 & 0b11) as usize]
-            } else {
-                JUMP4_NAMES[(byte1 & 0b1111) as usize]
+            let op_text = match byte1 >> 2 {
+                0b111010 => "jmp",
+                0b111000 => JUMP2_NAMES[(byte1 & 0b11) as usize],
+                _ => JUMP4_NAMES[(byte1 & 0b1111) as usize],
             };
 
             // This instruction is 2 bytes.
@@ -366,11 +372,13 @@ fn run(filename: &str) -> Vec<String> {
 
             instructions.insert(position, format!("{op_text} {label} ; {ip_inc8} short\n"));
 
-        // CALL JMP Direct within segment.
+        // 1110100 OP CALL JMP Direct within segment.
         } else if byte1 >> 1 == 0b1110100 {
+            let op = (byte1 & 1) as usize;
+
             let ip_inc = next_i16(&mut iterator, true);
 
-            let op_text = if byte1 & 1 == 0 { "call" } else { "jmp" };
+            let op_text = CALL_NAMES[op];
 
             // This instruction is 3 bytes.
             let target = position.checked_add_signed(3 + ip_inc as isize).unwrap();
@@ -381,18 +389,22 @@ fn run(filename: &str) -> Vec<String> {
 
         // CALL JMP Direct intersegment.
         } else if byte1 == 0b10011010 || byte1 == 0b11101010 {
+            // LSB bit 5 also works to map 0 to CALL and 1 to JMP.
+            let op = ((byte1 >> 6) & 1) as usize;
             let ip = next_i16(&mut iterator, true);
             let cs = next_i16(&mut iterator, true);
 
-            let op_text = if byte1 == 0b10011010 { "call" } else { "jmp" };
+            let op_text = CALL_NAMES[op];
 
             instructions.insert(position, format!("{op_text} {cs}:{ip}\n"));
 
         // Two fixed bytes.
         } else if byte1 == 0b11010100 || byte1 == 0b11010101 {
+            let op = (byte1 & 1) as usize;
+
             let byte2 = iterator.next().unwrap().1.unwrap();
 
-            let op_text = if byte1 & 1 == 0 { "aam" } else { "aad" };
+            let op_text = ASCII_ADJUST_NAMES[op];
 
             if byte2 == 0b00001010 {
                 instructions.insert(position, format!("{op_text}\n"));
