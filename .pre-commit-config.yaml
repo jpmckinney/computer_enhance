@@ -30,6 +30,7 @@ repos:
           "-Dclippy::nursery",
           "-Aclippy::cognitive-complexity",
           "-Aclippy::unreadable-literal",
+          "-Aclippy::unusual-byte-groupings",
           "-Aclippy::too-many-lines",
         ]
         pass_filenames: false
