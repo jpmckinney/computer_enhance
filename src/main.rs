@@ -1,5 +1,5 @@
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::env;
 use std::fs::File;
 use std::io::{self, BufReader, Bytes, Read, Write};
@@ -73,11 +73,10 @@ fn disassemble_r_m(iterator: &mut Enumerate<Bytes<BufReader<File>>>, w: usize, m
     }
 }
 
-fn run(filename: &str) -> Vec<String> {
+fn run<W: Write>(filename: &str, mut stdout: W) {
     let file = BufReader::new(File::open(filename).unwrap());
     let mut iterator = file.bytes().enumerate();
-    // Insert assembly instructions at byte indices.
-    let mut instructions = BTreeMap::new();
+    let mut instructions = vec![];
     // Track the byte index of each label.
     let mut labels = HashMap::new();
     // Segment override.
@@ -143,9 +142,9 @@ fn run(filename: &str) -> Vec<String> {
                 // 1 = the REG field identifies the destination operand.
                 // 0 = the REG field identifies the source operand.
                 if d == 1 && !locked {
-                    instructions.insert(position, format!("{op_text} {reg_text}, {r_m_text}\n"));
+                    instructions.push((position, format!("{op_text} {reg_text}, {r_m_text}\n")));
                 } else {
-                    instructions.insert(position, format!("{op_text} {r_m_text}, {reg_text}\n"));
+                    instructions.push((position, format!("{op_text} {r_m_text}, {reg_text}\n")));
                 }
             },
 
@@ -196,17 +195,17 @@ fn run(filename: &str) -> Vec<String> {
                 if mov_test || group == 0b100000 {
                     // data | data if w = 1 for MOV and TEST. data | data if sw = 01 for ADD, etc.
                     let data = next_i16(&mut iterator, (mov_test || s_v == 0) && w == 1);
-                    instructions.insert(position, format!("{op_text} {r_m_text}, {unit_text} {data}\n"));
+                    instructions.push((position, format!("{op_text} {r_m_text}, {unit_text} {data}\n")));
                 // Logic instructions.
                 } else if group == 0b110100 {
                     // 0 = Shift/rotate count is one. 1 = Shift/rotate count is specified in CL register.
                     let count = if s_v == 0 { "1" } else { "cl" };
-                    instructions.insert(position, format!("{op_text} {unit_text} {r_m_text}, {count}\n"));
+                    instructions.push((position, format!("{op_text} {unit_text} {r_m_text}, {count}\n")));
                 // Jump instructions. "Indirect intersegment."
                 } else if byte1 == 0b11111111 && (op == 0b011 || op == 0b101) {
-                    instructions.insert(position, format!("{op_text} {unit_text} far {r_m_text}\n"));
+                    instructions.push((position, format!("{op_text} {unit_text} far {r_m_text}\n")));
                 } else {
-                    instructions.insert(position, format!("{op_text} {unit_text} {r_m_text}\n"));
+                    instructions.push((position, format!("{op_text} {unit_text} {r_m_text}\n")));
                 }
             },
 
@@ -220,7 +219,7 @@ fn run(filename: &str) -> Vec<String> {
 
                 let reg_text = REG_NAMES[w][reg];
 
-                instructions.insert(position, format!("mov {reg_text}, {data}\n"));
+                instructions.push((position, format!("mov {reg_text}, {data}\n")));
             },
 
             // Accumulator. Next bytes are either: DATA | DATA if W = 1, ADDR-LO | ADDR-HI, DATA-8.
@@ -261,9 +260,9 @@ fn run(filename: &str) -> Vec<String> {
                 let data_text = if mov { format!("[{data}]") } else { data.to_string() };
 
                 if e {
-                    instructions.insert(position, format!("{op_text} {acc_text}, {data_text}\n"));
+                    instructions.push((position, format!("{op_text} {acc_text}, {data_text}\n")));
                 } else {
-                    instructions.insert(position, format!("{op_text} {data_text}, {acc_text}\n"));
+                    instructions.push((position, format!("{op_text} {data_text}, {acc_text}\n")));
                 }
             },
 
@@ -275,7 +274,7 @@ fn run(filename: &str) -> Vec<String> {
                 let op_text = UNARY_NAMES[op];
                 let reg_text = REG_NAMES[1][reg];
 
-                instructions.insert(position, format!("{op_text} {reg_text}\n"));
+                instructions.push((position, format!("{op_text} {reg_text}\n")));
             },
 
             // PUSH POP Segment register. One byte.
@@ -290,7 +289,7 @@ fn run(filename: &str) -> Vec<String> {
                 let sg_text = SEGMENT_NAMES[sg];
                 let op_text = STACK_NAMES[op];
 
-                instructions.insert(position, format!("{op_text} {sg_text}\n"));
+                instructions.push((position, format!("{op_text} {sg_text}\n")));
             },
 
             // SEGMENT. One byte.
@@ -310,7 +309,7 @@ fn run(filename: &str) -> Vec<String> {
 
                 let reg_text = REG_NAMES[1][reg];
 
-                instructions.insert(position, format!("xchg ax, {reg_text}\n"));
+                instructions.push((position, format!("xchg ax, {reg_text}\n")));
             },
 
             // IN OUT Accumulator. One byte: 111011 OUT W
@@ -321,9 +320,9 @@ fn run(filename: &str) -> Vec<String> {
                 let acc_text = if w { "ax" } else { "al" };
 
                 if out {
-                    instructions.insert(position, format!("out dx, {acc_text}\n"));
+                    instructions.push((position, format!("out dx, {acc_text}\n")));
                 } else {
-                    instructions.insert(position, format!("in {acc_text}, dx\n"));
+                    instructions.push((position, format!("in {acc_text}, dx\n")));
                 }
             },
 
@@ -331,14 +330,14 @@ fn run(filename: &str) -> Vec<String> {
             0b11000010 | 0b11001010 => {
                 let data = next_i16(&mut iterator, true);
 
-                instructions.insert(position, format!("ret {data}\n"));
+                instructions.push((position, format!("ret {data}\n")));
             },
 
             // INT. Fixed byte plus u8 data.
             0b11001101 => {
                 let data = next_u8(&mut iterator);
 
-                instructions.insert(position, format!("int {data}\n"));
+                instructions.push((position, format!("int {data}\n")));
             },
 
             // REP. Fixed byte plus lookup table.
@@ -358,7 +357,7 @@ fn run(filename: &str) -> Vec<String> {
                 };
                 let unit_text = if w { "w" } else { "b" };
 
-                instructions.insert(position, format!("rep {op_text}{unit_text}\n"));
+                instructions.push((position, format!("rep {op_text}{unit_text}\n")));
             },
 
               0b11101011                // JMP Direct within segment-short
@@ -380,7 +379,7 @@ fn run(filename: &str) -> Vec<String> {
                 let length = labels.len();
                 let label = labels.entry(target).or_insert_with(|| format!("label{length}"));
 
-                instructions.insert(position, format!("{op_text} {label} ; {ip_inc8} short\n"));
+                instructions.push((position, format!("{op_text} {label} ; {ip_inc8} short\n")));
             },
 
             // CALL JMP Direct within segment. 1110100 OP
@@ -396,7 +395,7 @@ fn run(filename: &str) -> Vec<String> {
                 let length = labels.len();
                 let label = labels.entry(target).or_insert_with(|| format!("label{length}"));
 
-                instructions.insert(position, format!("{op_text} {label} ; {ip_inc}\n"));
+                instructions.push((position, format!("{op_text} {label} ; {ip_inc}\n")));
             },
 
             // CALL JMP Direct intersegment.
@@ -409,7 +408,7 @@ fn run(filename: &str) -> Vec<String> {
 
                 let op_text = CALL_NAMES[op];
 
-                instructions.insert(position, format!("{op_text} {cs}:{ip}\n"));
+                instructions.push((position, format!("{op_text} {cs}:{ip}\n")));
             },
 
             // Two fixed bytes.
@@ -421,7 +420,7 @@ fn run(filename: &str) -> Vec<String> {
                 let op_text = ASCII_ADJUST_NAMES[op];
 
                 if byte2 == 0b00001010 {
-                    instructions.insert(position, format!("{op_text}\n"));
+                    instructions.push((position, format!("{op_text}\n")));
                 } else {
                     unreachable!();
                 }
@@ -461,9 +460,9 @@ fn run(filename: &str) -> Vec<String> {
                     _ => "",
                 };
                 if op_text.is_empty() {
-                    instructions.insert(position, format!("; {byte1:8b}\n")); // debugging
+                    instructions.push((position, format!("; {byte1:8b}\n"))); // debugging
                 } else {
-                    instructions.insert(position, op_text.to_string());
+                    instructions.push((position, op_text.to_string()));
                 }
             }
         };
@@ -474,29 +473,19 @@ fn run(filename: &str) -> Vec<String> {
         }
     }
 
-    for (position, label) in labels {
-        instructions
-            .entry(position)
-            .and_modify(|string| string.insert_str(0, &format!("{label}:\n")))
-            .or_insert_with(|| format!("; {position}: {label}\n")); // debugging
+    writeln!(stdout, "bits 16").unwrap();
+    for (position, string) in instructions {
+        if let Some(label) = labels.get(&position) {
+            writeln!(stdout, "{label}:").unwrap();
+        }
+        write!(stdout, "{string}").unwrap();
     }
-    if !instructions.is_empty() {
-        instructions
-            .entry(0)
-            .and_modify(|string| string.insert_str(0, "bits 16\n"))
-            .or_insert_with(|| String::from("bits 16\n"));
-    }
-
-    instructions.into_values().collect()
 }
 
 fn main() {
     let now = Instant::now();
     let filename = env::args().nth(1).unwrap();
-    let mut stdout = io::stdout().lock();
-    for line in run(&filename) {
-        write!(stdout, "{line}").unwrap();
-    }
+    run(&filename, &mut io::stdout().lock());
     eprintln!("{}", now.elapsed().as_micros());
 }
 
@@ -515,9 +504,7 @@ mod tests {
         let binary_path = dir.path().join("test");
         let mut assembly_file = File::create(assembly_path.clone()).unwrap();
 
-        for line in run(test_path) {
-            write!(assembly_file, "{line}").unwrap();
-        }
+        run(test_path, &mut assembly_file);
 
         let mut text = vec![];
         File::open(assembly_path.clone())
