@@ -95,10 +95,7 @@ fn run(filename: &str) -> Vec<String> {
             release_lock = true;
         }
 
-        // "Register/memory to/from register." "Reg/memory with register to either."
-        // "Register/memory with register." "Register/memory and register."
-        // "Load EA to register." "Load pointer to DS/ES."
-        //
+        // Next bytes are: MOD REG R/M | (DISP-LO) | (DISP-HI)
         match byte1 {
               0b00_000_0_00..=0b00_000_0_11 // 00 ADD 0 D W
             | 0b00_001_0_00..=0b00_001_0_11 // 00 OR  0 D W
@@ -152,8 +149,7 @@ fn run(filename: &str) -> Vec<String> {
                 }
             },
 
-            // "Immediate to register/memory." "Register/memory." "Immediate data and register/memory."
-            // "Indirect within segment."
+            // Next bytes are: MOD OP R/M | (DISP-LO) | (DISP-HI) | (DATA) | (DATA if cond = 1)
             //
             // TEST "Immediate data and register/memory" has the same first byte as NEG, etc.
             // so we need to put them all in this branch - but the latter do not have DATA bytes.
@@ -227,7 +223,7 @@ fn run(filename: &str) -> Vec<String> {
                 instructions.insert(position, format!("mov {reg_text}, {data}\n"));
             },
 
-            // Accumulator.
+            // Accumulator. Next bytes are either: DATA | DATA if W = 1, ADDR-LO | ADDR-HI, DATA-8.
               0b00_000_10_0..=0b00_000_10_1 // 00 ADD 1 0 W
             | 0b00_001_10_0..=0b00_001_10_1 // 00 OR  1 0 W
             | 0b00_010_10_0..=0b00_010_10_1 // 00 ADC 1 0 W
