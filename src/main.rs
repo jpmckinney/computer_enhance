@@ -108,13 +108,16 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
             | 0b1000010_0..=0b1000010_1     // 10 000 1 0 W TEST
             | 0b1000011_0..=0b1000011_1     // 10 000 1 1 W XCHG
             | 0b100010_00..=0b100010_11     // 10 001 0 D W MOV
-            | 0b10001101                    // LEA
+            | 0b100011_00 | 0b100011_10     // 10 001 S D 0 MOV
             | 0b11000100                    // LES
             | 0b11000101                    // LDS
+            | 0b10001101                    // LEA
             => {
-                // LEA, LES and LDS use REG for the destination and are wide.
                 let (d, w) = match byte1 {
-                    0b10001101 | 0b11000100 | 0b11000101 => (1, 1),
+                    // LES, LDS and LEA use REG for the destination and are wide.
+                    0b11000100 | 0b11000101 | 0b10001101 => (1, 1),
+                    // MOV with a segment register is wide.
+                    0b100011_00 | 0b100011_10 => ((byte1 >> 1) & 1, 1),
                     _ => ((byte1 >> 1) & 1, (byte1 & 1) as usize),
                 };
 
@@ -125,15 +128,19 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
                 let r_m = (byte2 & 0b111) as usize;
 
                 let op_text = match byte1 {
-                    0b10001101 => "lea",
                     0b11000100 => "les",
                     0b11000101 => "lds",
+                    0b10001101 => "lea",
                     0b1000010_0..=0b1000010_1 => "test",
                     0b1000011_0..=0b1000011_1 => "xchg",
-                    0b100010_00..=0b100010_11 => "mov",
+                    0b100010_00..=0b100010_11 | 0b100011_00 | 0b100011_10 => "mov",
                     _ => BINARY_NAMES[((byte1 >> 3) & 0b111) as usize],
                 };
-                let reg_text = REG_NAMES[w][reg];
+                let reg_text = if byte1 == 0b100011_00 || byte1 == 0b100011_10 {
+                    SEGMENT_NAMES[reg]
+                } else {
+                    REG_NAMES[w][reg]
+                };
                 let mut r_m_text = disassemble_r_m(&mut iterator, w, m0d, r_m);
                 if !segment.is_empty() {
                     r_m_text = format!("{segment}:{r_m_text}");
