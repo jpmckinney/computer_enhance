@@ -326,11 +326,14 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
                 }
             },
 
-            // RET. Fixed byte plus i16 data.
+            // RET RETF. Fixed byte plus i16 data.
             0b11000010 | 0b11001010 => {
+                let retf = (byte1 >> 3) & 1 == 1;
                 let data = next_i16(&mut iterator, true);
 
-                instructions.push((position, format!("ret {data}\n")));
+                let op_text = if retf { "retf" } else { "ret" };
+
+                instructions.push((position, format!("{op_text} {data}\n")));
             },
 
             // INT. Fixed byte plus u8 data.
@@ -440,8 +443,9 @@ fn run<W: Write>(filename: &str, mut stdout: W) {
                     0b00101111 => "das\n",
                     0b10011000 => "cbw\n",
                     0b10011001 => "cwd\n",
-                    0b11000011 | 0b11001011 => "ret\n",
-                    0b11001100 => "int\n",
+                    0b11000011 => "ret\n",
+                    0b11001011 => "retf\n",
+                    0b11001100 => "int3\n",
                     0b11001110 => "into\n",
                     0b11001111 => "iret\n",
                     0b11111000 => "clc\n",
@@ -486,7 +490,7 @@ fn main() {
     let now = Instant::now();
     let filename = env::args().nth(1).unwrap();
     run(&filename, &mut io::stdout().lock());
-    eprintln!("{}", now.elapsed().as_micros());
+    eprintln!("{}ms", now.elapsed().as_micros());
 }
 
 #[cfg(test)]
